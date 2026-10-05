@@ -20,30 +20,23 @@ blocked('2606:4700:4700::1111', 443)
 blocked('172.30.90.1', 40000)
 blocked('172.30.90.3', 8080)
 blocked('127.0.0.11', 53)  # Docker's embedded resolver must not bypass DNS policy.
-with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as dns:
-    dns.settimeout(1)
-    # A valid DNS query plus a known responsive UDP fixture distinguish a dropped
-    # packet from sending a malformed datagram that a public DNS server ignores.
-    dns.sendto(b'\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00'
-               b'\x07example\x03com\x00\x00\x01\x00\x01', ('1.1.1.1', 53))
-    try:
-        dns.recv(512)
-        raise AssertionError('direct UDP DNS unexpectedly allowed')
-    except socket.timeout:
-        pass
-    dns.sendto(b'\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00'
-               b'\x07example\x03com\x00\x00\x01\x00\x01', ('127.0.0.11', 53))
-    try:
-        dns.recv(512)
-        raise AssertionError('Docker DNS unexpectedly allowed')
-    except socket.timeout:
-        pass
-    dns.sendto(b'fixture', ('172.30.90.1', 5353))
-    try:
-        dns.recv(512)
-        raise AssertionError('direct UDP unexpectedly allowed')
-    except socket.timeout:
-        pass
+def udp_blocked(address, packet):
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as dns:
+        dns.settimeout(1)
+        try:
+            dns.sendto(packet, address)
+            dns.recv(512)
+        except OSError:
+            # Internal networks may deny via missing routes; nft DROP times out.
+            return
+        raise AssertionError(f'UDP unexpectedly allowed: {address}')
+
+
+query = (b'\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00'
+         b'\x07example\x03com\x00\x00\x01\x00\x01')
+udp_blocked(('1.1.1.1', 53), query)
+udp_blocked(('127.0.0.11', 53), query)
+udp_blocked(('172.30.90.1', 5353), b'fixture')
 
 # A host-side fixture is reachable only through the permitted relay port.
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
