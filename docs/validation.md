@@ -1,13 +1,13 @@
-# Proposal validation
+# Validation status
 
-Date: 5 October 2026.
+Date: 5 October 2026. Owner confirmed Rust + Serenity + Songbird before application code was started.
 
-- Parsed docker-compose.yml successfully with PyYAML.
-- Validated it against the [official Compose specification schema](https://github.com/compose-spec/compose-spec/blob/main/schema/compose-spec.json).
-- Checked ARM64 platform, restart policy, bounded tmpfs capacities, disabled Docker logging, read-only root filesystem, equal memory/swap limits, no published ports, guarded proposal profile and explicit data-directory creation.
-- Checked relative Markdown file links against files in the proposal.
-- Confirmed the proposal contains no application source code awaiting stack confirmation.
+Local: Cargo formatting and dependency-lock resolution completed. Compose schema and relative-document links are checked separately. This Windows host has no Docker or Linux environment; Linux compilation/tests and native ARM64 container execution run in GitHub Actions.
 
-No Docker runtime is available on the development machine, so docker compose config and image/container execution were not run. There is no built image, live Discord voice test, audio overlap recording or Orange Pi benchmark yet. Static schema validation does not establish runtime correctness or prove RAM-only behavior on the host.
+CI checks: `cargo fmt --all --check`, `cargo test --locked`, strict Clippy, ARM64 Docker build, architecture inspection, and runtime FFmpeg/yt-dlp/Node checks. Final run results will be recorded after completion.
 
-Implementation acceptance gates are listed in [audio design](audio-engine.md) and [deployment](deployment.md).
+Behavior tests cover queue limits/order, version-intent ranking, Unicode normalization, confidence/ambiguity, supported-provider hosts, public-IP checks, live-duration handling, both input signals during transition gain mixing, stale request rejection, preparation cancellation and decoder process cleanup. Signal tests prove gain/mix policy, not live voice output continuity.
+
+Not validated yet: Discord token authentication, command/component behavior in a real guild, current provider extraction reliability, recorded voice overlap and click/no-gap behavior, Orange Pi CPU/RAM/temperature, filesystem mount enforcement, host swap/log policies and prolonged failure recovery. No production-ready or benchmark claim is made.
+
+Remaining gates are in [audio design](audio-engine.md) and [deployment](deployment.md).

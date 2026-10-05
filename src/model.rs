@@ -4,6 +4,13 @@ use unicode_normalization::UnicodeNormalization;
 pub const MAX_QUEUE: usize = 200;
 pub const OUTPUT_GAIN: f32 = 0.5;
 
+pub fn identity_name(nickname: Option<&str>, application_name: &str) -> String {
+    nickname
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or(application_name)
+        .to_owned()
+}
+
 #[derive(Clone, Debug)]
 pub struct Media {
     pub title: String,
@@ -108,6 +115,15 @@ pub fn confident(scores: &[f64]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn identity_uses_portal_application_name_without_nickname() {
+        assert_eq!(identity_name(None, "Portal Name"), "Portal Name");
+        assert_eq!(identity_name(Some("  "), "Portal Name"), "Portal Name");
+        assert_eq!(
+            identity_name(Some("Guild Nick"), "Portal Name"),
+            "Guild Nick"
+        );
+    }
     fn media(title: &str) -> Media {
         Media {
             title: title.into(),

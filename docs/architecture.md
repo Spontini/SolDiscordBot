@@ -1,82 +1,29 @@
-# Proposed architecture
+# Implementation architecture
 
-Status: design, pending stack confirmation; paths below are planned, not implemented.
+Status: foundational code after owner stack confirmation. Remaining modules are listed in the roadmap.
 
 ```mermaid
 flowchart LR
-    D[Discord slash commands and components] --> S[Serenity interaction handlers]
-    S --> I[Guild identity resolver]
-    S --> A[Per-guild player actor]
-    A --> R[Provider resolver and candidate ranking]
-    R --> M[Resolved playable media]
-    M --> B[Bounded decoder inputs A and B]
-    B --> V[Songbird mixer and one Opus encoder]
-    V --> E[DAVE voice transport]
-    A --> P[SQLite playlists and settings]
-    A --> T[RAM queue and history]
+    D[Slash commands and components] --> S[Serenity handlers]
+    S --> I[Guild nickname and application-name cache]
+    S --> P[Serialized guild player state]
+    S --> R[Bounded yt-dlp resolver and ranking]
+    R --> P
+    P --> B[Two FFmpeg PCM sources]
+    B --> M[Songbird additive mixer and Opus]
+    M --> V[DAVE voice transport]
 ```
 
-## Responsibilities and concurrency
+`discord.rs` registers guild/global commands, defers slow replies, enforces same-voice-channel controls and owns at most one connected guild. Search selections are requester/guild/generation-bound, expire after two minutes and are capped at 64. Buttons recheck the user's voice channel. These initial controls have no DJ-role policy yet. Responses disable mentions from provider metadata.
 
-Interaction handlers defer slow replies promptly, validate guild and voice-channel access, and send typed requests to a bounded guild actor. The actor owns queue ordering, current/outgoing/incoming tracks, settings, history, and a monotonically increasing playback generation. A global admission controller limits active guilds and decoder/extractor jobs.
+`resolver.rs` serializes extraction, admits at most eight searches, caps metadata at 2 MiB and limits each subprocess to 45 seconds. Public playlists expand only their first 200 entries. Stderr is drained without retaining URLs or headers. Cancellation drops and kills the extractor. Search considers ten candidates and offers up to five choices. Signed stream URLs refresh just before decoder startup and are never persisted.
 
-Network requests and process IO run asynchronously. Blocking database or decoder work uses the driver's audio workers or a bounded blocking pool. Never hold the guild-state lock across network work, process startup, or Discord replies. Resolver results carry a generation identifier; results from an interrupted /play or /stop must not restart playback.
+`player.rs` serializes queue/control changes under one mutex. Its 20 ms worker uses bounded driver-state reads; provider I/O and input parsing run separately. A playback generation invalidates old searches/selections after stop, skip, disconnect or an accepted Now request. Next restores an unused preload ahead of the old queue before inserting the new batch. Stop clears both active sources and reserved preparations; skip during overlap promotes the incoming source once. Disconnect clears the allocation; voice moves update the control channel.
 
-The audio callback performs only mixing/encoding and short control operations. No provider search, database write, or Discord request belongs in it. Songbird separates asynchronous connection management from synchronous audio work. [Driver implementation](https://raw.githubusercontent.com/serenity-rs/songbird/current/src/driver/mod.rs).
+A global semaphore caps live FFmpeg decoders at two, including prepared inputs. Its permit is retained through process kill/reap. Decoder output is 48 kHz stereo float32 over a pipe, wrapped in Songbird's RawAdapter. Songbird parses/decodes on its worker threads and mixes two additive tracks into the shared Opus output. No whole-file media cache is used. Crossfade clock and gains use actual incoming play time, with 0.5 output headroom and Songbird soft clipping. Native decoder/pipe buffering is used; a custom ten-second byte-bounded prebuffer remains a future tuning option.
 
-## Dynamic identity
+`model.rs` owns tested queue insertion, ranking and transition gain policy. `main.rs` checks tools, fetches the Developer Portal application name, starts gateway/voice integration, writes a readiness heartbeat and handles termination. Guild nickname lookups use a five-minute cache, capped at 128 entries; failed lookups use the application name.
 
-At initialization, fetch the current application and cache its application name. This is deliberately the Developer Portal application name, which may differ from the bot user's username. For a guild, fetch the bot's own member and use a non-empty nickname when present; otherwise use the cached application name. Refresh guild identity on joining a guild and entering voice, and use a short TTL for later displays. Refresh relevant member updates when available. A failed member refresh can use the last known identity; it must not invent a nickname or silently change the configured global fallback.
+Initial enforced limits: one connected guild, two decoders, one extractor, eight resolving searches, 200 queued tracks. The container has a 1536 MiB memory/swap-equality limit and three CPU quota cores. These are admission/deployment caps, not target-device benchmark results.
 
-Use the same resolver for response titles, now-playing messages and help. Reject DMs for guild music controls. Application identity comes from the [current application resource](https://docs.discord.com/developers/resources/application); guild nickname comes from the [guild member resource](https://docs.discord.com/developers/resources/guild#guild-member-object).
-
-## Playback and queue rules
-
-- /play defaults to appending; Next inserts the whole requested batch at the head while preserving its order; Now cancels both crossfade sources and replaces playback immediately. Playlist shuffle happens before inserting the batch.
-- Resolve playlist entries lazily under a queue limit; avoid starting one subprocess per playlist item.
-- /stop cancels resolving, preloading, transitions, and both inputs, then clears the queue. /disconnect also tears down voice.
-- /pause freezes both tracks and the transition clock; /skip during a transition promotes the incoming track once. Queue mutation must invalidate stale preloads.
-- /seek uses playback-relative time, invalidates transitions, and restarts/repositions only supported finite sources. Live sources return a clear unsupported response.
-- Button/select interactions are scoped to guild, player generation, requester where needed, and an expiry. Apply DJ/voice membership checks again when a component is used.
-
-Only saved playlists/settings need durable storage. Runtime queue/history live in RAM unless a later settings choice explicitly adds persistence. Save user-requested durable edits before acknowledging success; do not write playback position every second.
-
-## Planned source layout
-
-```text
-src/
-  main.rs                 startup, shutdown, Discord client
-  config.rs               validated environment and limits
-  discord/
-    identity.rs           application and guild identity
-    commands/             slash commands grouped by module
-    components.rs         buttons, modals, search selections
-  music/
-    actor.rs              serialized guild player operations
-    queue.rs              queue, repeat, shuffle and history
-    resolve.rs            ranked query and URL resolution
-    providers/            explicit capability adapters
-    audio.rs              input lifetime and Songbird driver
-    crossfade.rs          two-track transition state machine
-  storage/                SQLite schema and repositories
-tests/                    queue, resolution and audio behavior
-deploy/                   image build and runtime checks
-```
-
-## Initial resource limits
-
-These are proposed admission limits, not benchmark results:
-
-| Resource | Initial limit |
-| --- | --- |
-| Active guild players | 1; consider 2 only after target-board measurements |
-| Decoder inputs | 2 total, including muted/preloaded tracks |
-| Extractor jobs | 1 total; requests wait in a bounded queue |
-| Metadata candidates | At most 10 per query |
-| Track queue | At most 200 entries per guild |
-| Audio buffers | At most 10 seconds per input, bounded by bytes |
-| Bot cgroup memory | 1536 MiB, including tmpfs use |
-| tmpfs capacity | 96 MiB temporary/cache + 16 MiB logs + 8 MiB runtime |
-| CPU quota | 3 cores, with audio-thread latency measured |
-
-Stereo PCM at 48 kHz uses 192,000 bytes/second for 16-bit samples or 384,000 for float32. Two 10-second float32 buffers need about 7.32 MiB, excluding decoder, transport and allocator overhead. Large file caches are unnecessary for streaming. Measure process RSS, cgroup memory, audio underruns, CPU and temperature during repeated 10-second overlaps before increasing concurrency.
+SQLite, durable playlists/settings, history and the remaining commands are not implemented. Only RAM state exists, so restarts clear playback and settings. The original [audio design](audio-engine.md) retains later acceptance gates and per-sample ramp alternatives.

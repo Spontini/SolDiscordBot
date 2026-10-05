@@ -74,14 +74,15 @@ impl App {
                 }
             }
         }
+        let bot_id = ctx.cache.current_user().id;
         let nick = ctx
             .http
-            .get_member(guild, ctx.cache.current_user().id)
+            .get_member(guild, bot_id)
             .await
             .ok()
             .and_then(|member| member.nick)
             .filter(|n| !n.trim().is_empty());
-        let name = nick.unwrap_or_else(|| self.application_name.clone());
+        let name = crate::model::identity_name(nick.as_deref(), &self.application_name);
         let mut cache = self.identities.lock().await;
         cache.retain(|_, (t, _)| t.elapsed() < Duration::from_secs(300));
         if cache.len() >= 128 {
@@ -126,7 +127,7 @@ impl App {
         {
             let mut call = call.lock().await;
             call.deafen(true).await?;
-            call.set_bitrate(songbird::Bitrate::Bits(96_000));
+            call.set_bitrate(songbird::driver::Bitrate::Bits(96_000));
         }
         let player = Player::new(call, self.resolver.clone(), self.decoders.clone());
         *active = Some(Active {
@@ -453,6 +454,11 @@ impl EventHandler for App {
                     .command(&ctx, &command)
                     .await
                     .unwrap_or_else(|error| (format!("{error}"), vec![]));
+                let content = if let Some(guild) = command.guild_id {
+                    format!("{}: {content}", self.identity(&ctx, guild).await)
+                } else {
+                    content
+                };
                 let response = EditInteractionResponse::new()
                     .content(short(&content, 1900))
                     .components(components)

@@ -251,6 +251,9 @@ impl Player {
     pub async fn skip(&self) -> String {
         self.generation.fetch_add(1, Ordering::SeqCst);
         let mut state = self.state.lock().await;
+        if state.current.is_none() {
+            state.cancel_prepared();
+        }
         if let Some(old) = state.current.take() {
             let _ = old.handle.stop();
         }
@@ -368,7 +371,7 @@ impl State {
             }
         }
     }
-    async fn attach(&self, media: Media, input: Input, volume: f32) -> Playing {
+    async fn attach(&mut self, media: Media, input: Input, volume: f32) -> Playing {
         let handle = self
             .call
             .lock()
@@ -392,20 +395,25 @@ impl State {
                 }
             }
         }
-        let current_info = if let Some(current) = &self.current {
-            tokio::time::timeout(Duration::from_millis(100), current.handle.get_info())
-                .await
-                .ok()
-                .and_then(Result::ok)
+        let (current_info, lost_handle) = if let Some(current) = &self.current {
+            match tokio::time::timeout(Duration::from_millis(100), current.handle.get_info()).await
+            {
+                Ok(Ok(info)) => (Some(info), false),
+                Ok(Err(_)) => (None, true),
+                Err(_) => (None, false),
+            }
         } else {
-            None
+            (None, false)
         };
         // A dropped driver handle also means the current source is gone.
-        if self.current.is_some() && current_info.as_ref().is_some_and(|s| s.playing.is_done()) {
+        if self.current.is_some()
+            && (lost_handle || current_info.as_ref().is_some_and(|s| s.playing.is_done()))
+        {
             self.current = None;
             self.current = self.incoming.take();
             if let Some(current) = &self.current {
                 let _ = current.handle.set_volume(OUTPUT_GAIN);
+                return;
             }
         }
         if self.current.is_none() {
@@ -462,5 +470,85 @@ impl State {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn media() -> Media {
+        Media {
+            title: "Fixture".into(),
+            artist: "Fixture".into(),
+            url: "https://www.youtube.com/watch?v=x".into(),
+            duration: Some(60.0),
+            verified: false,
+        }
+    }
+    fn player() -> Player {
+        let call = Call::standalone(
+            serenity::all::GuildId::new(1),
+            serenity::all::UserId::new(2),
+        );
+        Player::new(
+            Arc::new(Mutex::new(call)),
+            Resolver::default(),
+            Arc::new(Semaphore::new(2)),
+        )
+    }
+    #[tokio::test]
+    async fn stopped_search_cannot_revive_playback() {
+        let player = player();
+        let old_epoch = player.epoch();
+        player.stop(false).await;
+        assert!(
+            player
+                .enqueue(vec![media()], Position::End, old_epoch)
+                .await
+                .is_err()
+        );
+        assert!(player.state.lock().await.queue.is_empty());
+        player.stop(true).await;
+    }
+    #[tokio::test]
+    async fn stop_aborts_preparation_and_clears_reserved_queue() {
+        let player = player();
+        let task = tokio::spawn(std::future::pending::<Result<(Media, Input)>>());
+        let abort = task.abort_handle();
+        {
+            let mut state = player.state.lock().await;
+            state.pending = Some(Pending {
+                media: media(),
+                task,
+            });
+            state.queue.push_back(media());
+        }
+        player.stop(true).await;
+        tokio::task::yield_now().await;
+        let state = player.state.lock().await;
+        assert!(state.pending.is_none());
+        assert!(state.queue.is_empty());
+        assert!(state.shutdown);
+        assert!(abort.is_finished());
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn decoder_slot_returns_after_process_cleanup() {
+        let slots = Arc::new(Semaphore::new(1));
+        let permit = slots.clone().acquire_owned().await.unwrap();
+        let child = Command::new("sleep")
+            .arg("60")
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        drop(Decoder {
+            child: Some(child),
+            permit: Some(permit),
+        });
+        let recovered = tokio::time::timeout(Duration::from_secs(3), slots.acquire())
+            .await
+            .unwrap()
+            .unwrap();
+        drop(recovered);
     }
 }

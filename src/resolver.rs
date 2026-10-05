@@ -10,6 +10,7 @@ const OUTPUT_LIMIT: u64 = 2 * 1024 * 1024;
 #[derive(Clone)]
 pub struct Resolver {
     gate: Arc<Semaphore>,
+    requests: Arc<Semaphore>,
 }
 pub enum Resolution {
     Batch(Vec<Media>),
@@ -24,6 +25,7 @@ impl Default for Resolver {
     fn default() -> Self {
         Self {
             gate: Arc::new(Semaphore::new(1)),
+            requests: Arc::new(Semaphore::new(8)),
         }
     }
 }
@@ -167,6 +169,12 @@ impl Resolver {
                     .take(OUTPUT_LIMIT + 1)
                     .read_to_end(&mut bytes)
                     .await?;
+                if bytes.len() as u64 > OUTPUT_LIMIT {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Provider metadata exceeded the safety limit.",
+                    ));
+                }
                 Ok::<_, std::io::Error>(bytes)
             };
             // Drain stderr without retaining signed URLs, request headers or cookies.
@@ -188,6 +196,10 @@ impl Resolver {
     }
 
     pub async fn resolve(&self, query: &str) -> Result<Resolution> {
+        let _request = self
+            .requests
+            .try_acquire()
+            .context("Too many pending searches. Try again shortly.")?;
         let query = query.trim();
         if query.is_empty() || query.len() > 500 {
             bail!("Use a query between 1 and 500 characters.");

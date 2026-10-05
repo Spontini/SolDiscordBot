@@ -1,6 +1,6 @@
 # Development Roadmap
 
-Current milestone: research and architecture proposal prepared; owner stack confirmation pending. No application code or target-device benchmark is complete. Review [the stack proposal](stack-proposal.md) before implementation.
+Current milestone: stack confirmed; Rust music foundation implemented and undergoing CI validation. Live Discord voice validation and Orange Pi benchmarks remain open. See [validation](validation.md) for evidence and limits.
 
 ## 1. Research and stack proposal
 
@@ -12,7 +12,7 @@ Current milestone: research and architecture proposal prepared; owner stack conf
 ## 2. Audio engine validation
 
 - Demonstrate two simultaneous decoded tracks blended into one outbound stream.
-- Confirm configurable 3–10 second transitions and transition modes.
+- Confirm configurable 3â€“10 second transitions and transition modes.
 - Measure CPU and RAM use on the deployment target, including overlapping tracks.
 - Design intelligent query ranking and expose ambiguous matches through interactive selection.
 

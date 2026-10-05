@@ -1,6 +1,6 @@
 # Stack proposal
 
-Status: proposed; awaiting owner confirmation. Research date: 5 October 2026.
+Status: owner confirmed Rust + Serenity + Songbird on 5 October 2026; foundational implementation is under development. Research date: 5 October 2026.
 
 ## Recommendation
 
