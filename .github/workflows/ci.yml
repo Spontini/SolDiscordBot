@@ -63,7 +63,10 @@ jobs:
           docker run -d --name warp-bridge --network host -e SOL_BRIDGE_IP=172.30.90.1 -e SOL_WORKER_IP=172.30.90.2 sol-bridge:ci
           docker run -d --name sol-media --network sol-test --ip 172.30.90.2 --read-only --tmpfs /tmp:rw,mode=1777 --tmpfs /var/log/sol:rw,uid=10001,gid=10001 --cap-drop ALL --cap-add NET_ADMIN --cap-add SETUID --cap-add SETGID --cap-add SETPCAP --security-opt no-new-privileges -e SOL_MEDIA_PROXY=http://172.30.90.1:40001 -e SOL_WORKER_IP=172.30.90.2 -e SOL_BOT_IP=172.30.90.3 soldiscordbot-media:ci
           sleep 5
-          docker exec -i --user 10001 sol-media python3 - < tests/network_probe.py
+          # docker exec skips the entrypoint; use its complete privilege drop.
+          docker exec -i --user 0 sol-media setpriv --reuid=10001 --regid=10001 --clear-groups \
+            --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs \
+            python3 - < tests/network_probe.py
           docker stop warp-bridge
           docker exec --user 10001 sol-media python3 -c 'import socket; s=socket.socket(); s.settimeout(1); assert s.connect_ex(("1.1.1.1",443)) != 0; print("Proxy outage: direct connection remains blocked")'
       - name: Clean up network fixtures
