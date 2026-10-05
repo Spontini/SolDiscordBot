@@ -101,16 +101,21 @@ print('Persistent pinned yt-dlp session reused; direct egress blocked; relay rea
 
 # Docker exec is UID 10001; verify the real running worker dropped all capabilities.
 checked = 0
+warm_extractors = 0
 for entry in os.listdir('/proc'):
     if entry.isdigit():
         try:
             command = open(f'/proc/{entry}/cmdline', 'rb').read()
-            if b'/opt/media/worker.py' in command or b'/opt/bgutil/build/main.js' in command:
+            if (b'/opt/media/worker.py' in command or b'/opt/bgutil/build/main.js' in command
+                    or b'/opt/media/extract.py' in command):
                 fields = dict(line.split(':', 1) for line in open(f'/proc/{entry}/status') if ':' in line)
                 assert int(fields['CapEff'].strip(), 16) == 0
                 assert int(fields['CapBnd'].strip(), 16) == 0
                 checked += 1
+                if b'/opt/media/extract.py' in command:
+                    warm_extractors += 1
         except (FileNotFoundError, PermissionError):
             pass
 assert checked >= 1, 'no protected application process inspected'
+assert warm_extractors >= 1, 'production warm extractor not inspected'
 print('Direct IPv4/IPv6/DNS blocked; proxy relay reachable; application capabilities dropped.')
