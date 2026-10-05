@@ -121,6 +121,7 @@ impl App {
         let manager = songbird::get(ctx)
             .await
             .context("Voice manager is unavailable.")?;
+        let joined = Instant::now();
         let call = match tokio::time::timeout(Duration::from_secs(20), manager.join(guild, channel))
             .await
         {
@@ -132,6 +133,10 @@ impl App {
                 );
             }
         };
+        tracing::info!(
+            elapsed_ms = joined.elapsed().as_millis() as u64,
+            "voice_join_complete"
+        );
         let setup = {
             let mut call = call.lock().await;
             let result = call.deafen(true).await;
@@ -171,10 +176,12 @@ impl App {
                 };
                 let player = self.player(ctx, guild, user, true).await?;
                 let epoch = player.epoch();
+                let resolving = Instant::now();
                 let resolution = tokio::select! {
                     resolution=self.resolver.resolve(query)=>resolution?,
                     _=async{loop{tokio::time::sleep(Duration::from_millis(100)).await;if player.epoch()!=epoch{break;}}}=>bail!("Playback request cancelled.")
                 };
+                tracing::info!(elapsed_ms = resolving.elapsed().as_millis() as u64, "play_resolution_complete");
                 // Recheck voice membership after slow provider I/O.
                 self.player(ctx, guild, user, false).await?;
                 match resolution {
