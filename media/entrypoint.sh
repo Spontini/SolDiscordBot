@@ -14,13 +14,13 @@ bot = ipaddress.ip_address(os.environ['SOL_BOT_IP'])
 assert worker.version == bot.version == 4 and worker.is_private and bot.is_private
 policy = f'''table inet sol_media {{
  chain output {{ type filter hook output priority 0; policy drop;
-  oifname "lo" accept
   ct state established,related accept
+  oifname "lo" ip daddr 127.0.0.1 tcp dport {{ 4416, 4417, 8080 }} accept
   ip daddr {address} tcp dport 40001 accept
  }}
  chain input {{ type filter hook input priority 0; policy drop;
-  iifname "lo" accept
   ct state established,related accept
+  iifname "lo" ip saddr 127.0.0.1 tcp dport {{ 4416, 4417, 8080 }} accept
   ip saddr {bot} tcp dport 8080 accept
  }}
 }}'''

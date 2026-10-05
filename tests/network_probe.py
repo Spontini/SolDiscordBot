@@ -16,8 +16,10 @@ def blocked(host, port):
 # Public IPv4, IPv4-mapped IPv6 and other ports on the bridge gateway are blocked.
 blocked('1.1.1.1', 443)
 blocked('::ffff:1.1.1.1', 443)
+blocked('2606:4700:4700::1111', 443)
 blocked('172.30.90.1', 40000)
 blocked('172.30.90.3', 8080)
+blocked('127.0.0.11', 53)  # Docker's embedded resolver must not bypass DNS policy.
 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as dns:
     dns.settimeout(1)
     # A valid DNS query plus a known responsive UDP fixture distinguish a dropped
@@ -27,6 +29,13 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as dns:
     try:
         dns.recv(512)
         raise AssertionError('direct UDP DNS unexpectedly allowed')
+    except socket.timeout:
+        pass
+    dns.sendto(b'\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00'
+               b'\x07example\x03com\x00\x00\x01\x00\x01', ('127.0.0.11', 53))
+    try:
+        dns.recv(512)
+        raise AssertionError('Docker DNS unexpectedly allowed')
     except socket.timeout:
         pass
     dns.sendto(b'fixture', ('172.30.90.1', 5353))
@@ -42,6 +51,7 @@ with opener.open('http://172.30.90.1:40001/fixture', timeout=5) as response:
     assert response.read() == b'proxy-fixture'
 
 # Docker exec is UID 10001; verify the real running worker dropped all capabilities.
+checked = 0
 for entry in os.listdir('/proc'):
     if entry.isdigit():
         try:
@@ -50,6 +60,8 @@ for entry in os.listdir('/proc'):
                 fields = dict(line.split(':', 1) for line in open(f'/proc/{entry}/status') if ':' in line)
                 assert int(fields['CapEff'].strip(), 16) == 0
                 assert int(fields['CapBnd'].strip(), 16) == 0
+                checked += 1
         except (FileNotFoundError, PermissionError):
             pass
+assert checked >= 1, 'no protected application process inspected'
 print('Direct IPv4/IPv6/DNS blocked; proxy relay reachable; application capabilities dropped.')

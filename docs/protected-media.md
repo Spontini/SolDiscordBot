@@ -41,9 +41,10 @@ flowchart LR
   are possible. Provider expiry is an estimate; YouTube can revoke tokens early.
 - `media/entrypoint.sh`: installs IPv4/IPv6 nftables rules in the worker namespace
   before application startup, then switches to UID 10001 and drops all capabilities.
-  Outbound connections allow only loopback, established replies and the private
+  Outbound connections allow only the three loopback IPC ports, established replies and the private
   relay's IP/port. Direct Internet, DNS and other host ports are denied. Redirects
-  and WebSockets must use that same allowed proxy path or fail.
+  and WebSockets must use that same allowed proxy path or fail. Docker's embedded
+  DNS resolver at 127.0.0.11 is blocked as well.
 - `media/bridge.py`: binds only the Docker gateway, accepts only the worker's IP,
   and forwards to the fixed WARP loopback listener. It has no public port mapping.
 - `media/client.py`: bot-side IPC rejects external destinations and redirects.

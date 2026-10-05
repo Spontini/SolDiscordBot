@@ -92,11 +92,11 @@ def ffmpeg_command(info, offset=0):
     # Prevent media URLs from targeting private literal addresses. DNS is resolved
     # by WARP; there is no worker-side external DNS exception in the firewall.
     try:
-        if not ipaddress.ip_address(parsed.hostname).is_global:
-            raise ValueError('private_stream_address')
+        literal = ipaddress.ip_address(parsed.hostname)
     except ValueError:
-        if all(c in '0123456789abcdefABCDEF:.' for c in parsed.hostname):
-            raise ValueError('invalid_stream_address') from None
+        literal = None
+    if literal is not None and not literal.is_global:
+        raise ValueError('private_stream_address')
     headers = ''
     for name in ('User-Agent', 'Referer', 'Origin'):
         value = info.get('http_headers', {}).get(name)
@@ -106,6 +106,7 @@ def ffmpeg_command(info, offset=0):
             headers += f'{name}: {value}\r\n'
     command = ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error',
                '-threads', '1', '-rw_timeout', '15000000', '-http_proxy', PROXY,
+               '-tls_verify', '1', '-ca_file', '/etc/ssl/certs/ca-certificates.crt',
                '-protocol_whitelist', 'http,https,tcp,tls,crypto']
     if headers:
         command += ['-headers', headers]
@@ -176,6 +177,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def reply(self, status, value):
         data = json.dumps(value, separators=(',', ':')).encode()
+        if len(data) > 2 * 1024 * 1024:
+            raise ValueError('response_limit')
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(data)))
@@ -262,6 +265,10 @@ class Handler(BaseHTTPRequestHandler):
                                 self.send_response(200)
                                 self.send_header('Content-Type', 'application/octet-stream')
                                 self.end_headers()
+                                # Paused playback applies TCP backpressure. Do not
+                                # turn an intentional long pause into a write timeout.
+                                # Closing the bot client still breaks the socket write.
+                                self.connection.settimeout(None)
                                 started = True
                             timer.cancel()
                             # Client disconnect kills/reaps decoder in finally.

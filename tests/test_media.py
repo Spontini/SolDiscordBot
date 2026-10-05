@@ -123,6 +123,7 @@ class Isolation(unittest.TestCase):
     def test_ffmpeg_requires_proxy_and_https(self):
         command = ffmpeg_command({'url': 'https://cdn.googlevideo.com/stream'})
         self.assertIn('-http_proxy', command)
+        self.assertEqual(command[command.index('-tls_verify') + 1], '1')
         self.assertEqual(command[command.index('-http_proxy') + 1], 'http://172.30.90.1:40001')
         for value in ['http://cdn.googlevideo.com/s', 'https://127.0.0.1/s',
                       'https://[::1]/s', 'file:///tmp/s']:

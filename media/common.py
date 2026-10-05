@@ -3,6 +3,7 @@ import json
 import logging
 import logging.handlers
 import os
+import signal
 import subprocess
 import threading
 
@@ -23,15 +24,26 @@ def event(name, **fields):
 def run_bounded(command, *, data=None, timeout=60, limit=2 * 1024 * 1024):
     """Kill/reap on timeout or oversized output; discard potentially secret stderr."""
     with subprocess.Popen(command, stdin=subprocess.PIPE if data else subprocess.DEVNULL,
-                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as child:
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                          start_new_session=os.name != 'nt') as child:
         output = bytearray()
         overflow = threading.Event()
+
+        def kill_tree():
+            try:
+                if os.name == 'nt':
+                    child.kill()
+                else:
+                    # yt-dlp can spawn Node/EJS. Reap the complete process group.
+                    os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
         def drain():
             while block := child.stdout.read(8192):
                 if len(output) + len(block) > limit:
                     overflow.set()
-                    child.kill()
+                    kill_tree()
                     return
                 output.extend(block)
 
@@ -43,10 +55,12 @@ def run_bounded(command, *, data=None, timeout=60, limit=2 * 1024 * 1024):
                 child.stdin.close()
             status = child.wait(timeout=timeout)
         except BaseException:
-            child.kill()
+            kill_tree()
             child.wait()
             raise
         finally:
+            if os.name != 'nt':
+                kill_tree()
             reader.join(timeout=3)
         if overflow.is_set() or reader.is_alive():
             raise ValueError('output_limit')
