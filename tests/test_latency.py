@@ -124,6 +124,7 @@ class YoutubeDL:
     def __enter__(self): return self
     def __exit__(self, *args): pass
     def sanitize_info(self, info): return info
+    def urlopen(self, request): raise AssertionError('offline fixture')
     def extract_info(self, query, download):
         self.calls += 1
         return {'calls': self.calls, 'flat': self.params['extract_flat'],
