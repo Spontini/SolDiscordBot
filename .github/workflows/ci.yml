@@ -25,6 +25,7 @@ jobs:
       - run: cargo +1.99.0 fmt --all --check
       - run: cargo +1.99.0 test --locked
       - run: cargo +1.99.0 clippy --locked --all-targets -- -D warnings
+      - run: python3 -m unittest discover -s tests -p test_media.py -v
   arm64:
     runs-on: ubuntu-24.04-arm
     steps:
@@ -37,7 +38,36 @@ jobs:
           tags: soldiscordbot:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: Verify ARM64 runtime tools without credentials
+      - name: Verify ARM64 bot runtime without credentials
         run: |
           test "$(docker image inspect soldiscordbot:ci --format '{{.Architecture}}')" = arm64
-          docker run --rm --entrypoint sh soldiscordbot:ci -c 'ffmpeg -version >/dev/null && yt-dlp --version && node --version'
+          docker run --rm --entrypoint python3 soldiscordbot:ci -c 'import ast; ast.parse(open("/opt/media/client.py").read())'
+      - uses: docker/build-push-action@v7.4.0
+        with:
+          context: .
+          file: media/Dockerfile
+          load: true
+          tags: soldiscordbot-media:ci
+          cache-from: type=gha,scope=media
+          cache-to: type=gha,mode=max,scope=media
+      - name: Verify provider and extractor compatibility
+        run: |
+          docker run --rm --entrypoint sh soldiscordbot-media:ci -c 'ffmpeg -version >/dev/null && yt-dlp --version && node /opt/bgutil/build/generate_once.js --version && python3 -c "from yt_dlp_plugins.extractor.getpot_bgutil_http import BgUtilHTTPPTP"'
+      - name: Verify network kill switch with a local fixture
+        env:
+          DISCORD_TOKEN: ci-placeholder-not-a-real-token
+        run: |
+          docker network create --internal --subnet 172.30.90.0/24 --gateway 172.30.90.1 sol-test
+          docker build -f media/Dockerfile.bridge -t sol-bridge:ci .
+          docker run -d --name mock-warp --network host -v "$PWD/tests/mock_proxy.py:/fixture.py:ro" --entrypoint python3 sol-bridge:ci /fixture.py
+          docker run -d --name warp-bridge --network host -e SOL_BRIDGE_IP=172.30.90.1 -e SOL_WORKER_IP=172.30.90.2 sol-bridge:ci
+          docker run -d --name sol-media --network sol-test --ip 172.30.90.2 --read-only --tmpfs /tmp:rw,mode=1777 --tmpfs /var/log/sol:rw,uid=10001,gid=10001 --cap-drop ALL --cap-add NET_ADMIN --cap-add SETUID --cap-add SETGID --cap-add SETPCAP --security-opt no-new-privileges -e SOL_MEDIA_PROXY=http://172.30.90.1:40001 -e SOL_WORKER_IP=172.30.90.2 -e SOL_BOT_IP=172.30.90.3 soldiscordbot-media:ci
+          sleep 5
+          docker exec -i --user 10001 sol-media python3 - < tests/network_probe.py
+          docker stop warp-bridge
+          docker exec --user 10001 sol-media python3 -c 'import socket; s=socket.socket(); s.settimeout(1); assert s.connect_ex(("1.1.1.1",443)) != 0; print("Proxy outage: direct connection remains blocked")'
+      - name: Clean up network fixtures
+        if: always()
+        run: |
+          docker rm -f sol-media warp-bridge mock-warp || true
+          docker network rm sol-test || true

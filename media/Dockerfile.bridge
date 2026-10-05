@@ -1,0 +1,5 @@
+FROM python:3.13-slim-bookworm
+ENV PYTHONDONTWRITEBYTECODE=1
+COPY media/bridge.py /opt/bridge.py
+USER 10001:10001
+ENTRYPOINT ["python3", "/opt/bridge.py"]
