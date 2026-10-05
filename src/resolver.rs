@@ -19,6 +19,7 @@ pub enum Resolution {
 pub struct Stream {
     pub url: String,
     pub headers: String,
+    pub duration: Option<f64>,
 }
 
 impl Default for Resolver {
@@ -188,7 +189,7 @@ impl Resolver {
                     "Provider extraction failed. The media may be restricted, unavailable or require provider authentication."
                 );
             }
-            Ok(serde_json::from_slice(&bytes).context("Provider returned invalid metadata.")?)
+            serde_json::from_slice(&bytes).context("Provider returned invalid metadata.")
         };
         tokio::time::timeout(Duration::from_secs(45), work)
             .await
@@ -204,7 +205,7 @@ impl Resolver {
         if query.is_empty() || query.len() > 500 {
             bail!("Use a query between 1 and 500 characters.");
         }
-        let exact = Url::parse(query).is_ok();
+        let exact = query.starts_with("http://") || query.starts_with("https://");
         if exact {
             supported_url(query)?;
         } else if query.contains("://") {
@@ -219,7 +220,7 @@ impl Resolver {
         let mut tracks = if let Some(entries) = json.get("entries").and_then(Value::as_array) {
             entries
                 .iter()
-                .filter_map(|v| media(v, query))
+                .filter_map(|v| media(v, ""))
                 .collect::<Vec<_>>()
         } else {
             media(&json, query).into_iter().collect()
@@ -262,7 +263,20 @@ impl Resolver {
         Ok(Stream {
             url: raw.into(),
             headers,
+            duration: media_from_stream(&json),
         })
+    }
+}
+
+fn media_from_stream(json: &Value) -> Option<f64> {
+    if json.get("is_live").and_then(Value::as_bool) == Some(true)
+        || json.get("live_status").and_then(Value::as_str) == Some("is_live")
+    {
+        None
+    } else {
+        json.get("duration")
+            .and_then(Value::as_f64)
+            .filter(|d| d.is_finite() && *d > 0.0)
     }
 }
 

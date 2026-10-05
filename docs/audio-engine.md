@@ -1,16 +1,16 @@
-# Proposed audio engine and crossfade
+# Audio engine design and validation gates
 
 ## Engine selection
 
-Use Songbird's native multi-track driver. Its non-exclusive play operation adds a source while preserving other inputs; the exclusive play operation replaces them. Use the additive path for transitions and an application-owned queue rather than relying on a sequential queue to produce crossfading. This is supported overlapping playback, with the transition policy still to be implemented. [Songbird driver source](https://raw.githubusercontent.com/serenity-rs/songbird/current/src/driver/mod.rs).
+Use Songbird's native multi-track driver. Its non-exclusive play operation adds a source while preserving other inputs; the exclusive play operation replaces them. Use the additive path for transitions and an application-owned queue rather than relying on a sequential queue to produce crossfading. This is supported overlapping playback, with the initial transition policy implemented in src/player.rs. [Songbird driver source](https://raw.githubusercontent.com/serenity-rs/songbird/current/src/driver/mod.rs).
 
-Decode each source to a compatible common sample rate/channel layout, blend inside one guild driver, then encode the mixed output once. Keep Opus passthrough disabled during mixing/effects. Native decoding through Songbird/Symphonia is the preferred path; add bounded FFmpeg pipe inputs for unsupported formats and presets. No complete track is written to disk.
+Decode each source to a compatible common sample rate/channel layout, blend inside one guild driver, then encode the mixed output once. Keep Opus passthrough disabled during mixing/effects. The current adapter uses FFmpeg PCM pipes for all playable sources and ten-second bounded PCM channels into Songbird/Symphonia. No complete track is written to disk.
 
 FFmpeg's acrossfade filter provides a useful reference for validating finite two-input transitions and has an explicit overlap option. A static two-URL filter graph alone is not the proposed mutable Discord queue engine. [FFmpeg acrossfade documentation](https://www.ffmpeg.org/ffmpeg-filters.html#acrossfade).
 
 ## Transition mechanics
 
-The /crossfade command stores enabled/disabled, a 3–10 second duration, and a curve. Propose 5 seconds and an equal-power curve when enabled; crossfade is disabled by default until validation.
+The /crossfade command stores enabled/disabled, a 3–10 second duration, and a curve. The implementation defaults to 5 seconds and a linear curve; crossfade is disabled by default until validation.
 
 For normalized progress t from 0 to 1:
 
@@ -47,4 +47,4 @@ Every state-changing operation increments the playback generation and cancels ol
 4. Run DAVE voice playback/reconnect in a test guild and capture underrun behavior separately from mixer correctness.
 5. Measure sustained ARM64 playback and repeated overlap on the Orange Pi before raising player capacity.
 
-These are future implementation acceptance gates; no audio prototype or device benchmark has been run in the proposal phase.
+These remain live-voice/device acceptance gates. Unit tests exercise simultaneous input signals and gain policy; no recorded outbound Discord audio or device benchmark has been run.

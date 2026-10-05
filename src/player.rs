@@ -13,8 +13,9 @@ use std::{
     io::{Read, Seek, SeekFrom},
     process::{Child, Command, Stdio},
     sync::{
-        Arc,
+        Arc, Mutex as StdMutex,
         atomic::{AtomicU64, Ordering},
+        mpsc::{Receiver, sync_channel},
     },
     time::Duration,
 };
@@ -27,16 +28,84 @@ use tokio::{
 struct Decoder {
     child: Option<Child>,
     permit: Option<OwnedSemaphorePermit>,
+    frames: StdMutex<Receiver<Vec<u8>>>,
+    frame: Vec<u8>,
+    offset: usize,
+}
+impl Decoder {
+    fn buffered(
+        mut child: Child,
+        permit: OwnedSemaphorePermit,
+    ) -> (Self, tokio::sync::oneshot::Receiver<()>) {
+        let mut stdout = child.stdout.take().expect("decoder stdout was piped");
+        // 500 stereo 20 ms float32 frames = 10 seconds = 3,840,000 bytes.
+        let (sender, frames) = sync_channel(500);
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        tokio::task::spawn_blocking(move || {
+            let mut ready_tx = Some(ready_tx);
+            let mut count = 0;
+            loop {
+                let mut frame = vec![0; 7680];
+                let mut filled = 0;
+                while filled < frame.len() {
+                    match stdout.read(&mut frame[filled..]) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => filled += n,
+                    }
+                }
+                if filled == 0 {
+                    break;
+                }
+                frame.truncate(filled);
+                if sender.send(frame).is_err() {
+                    break;
+                }
+                count += 1;
+                if count == 25 {
+                    if let Some(ready) = ready_tx.take() {
+                        let _ = ready.send(());
+                    }
+                }
+                if filled < 7680 {
+                    break;
+                }
+            }
+            if count > 0 {
+                if let Some(ready) = ready_tx.take() {
+                    let _ = ready.send(());
+                }
+            }
+        });
+        (
+            Self {
+                child: Some(child),
+                permit: Some(permit),
+                frames: StdMutex::new(frames),
+                frame: Vec::new(),
+                offset: 0,
+            },
+            ready_rx,
+        )
+    }
 }
 impl Read for Decoder {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.child
-            .as_mut()
-            .unwrap()
-            .stdout
-            .as_mut()
-            .unwrap()
-            .read(buf)
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        if self.offset == self.frame.len() {
+            match self.frames.get_mut().expect("PCM receiver lock").recv() {
+                Ok(frame) => {
+                    self.frame = frame;
+                    self.offset = 0;
+                }
+                Err(_) => return Ok(0),
+            }
+        }
+        let len = buf.len().min(self.frame.len() - self.offset);
+        buf[..len].copy_from_slice(&self.frame[self.offset..self.offset + len]);
+        self.offset += len;
+        Ok(len)
     }
 }
 impl Seek for Decoder {
@@ -74,9 +143,10 @@ impl Drop for Decoder {
 async fn prepare(
     resolver: Resolver,
     decoders: Arc<Semaphore>,
-    media: Media,
+    mut media: Media,
 ) -> Result<(Media, Input)> {
     let stream = resolver.stream(&media).await?;
+    media.duration = stream.duration;
     let permit = decoders.acquire_owned().await?;
     let mut command = Command::new("ffmpeg");
     command.args([
@@ -111,15 +181,9 @@ async fn prepare(
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()?;
-    let input: Input = RawAdapter::new(
-        Decoder {
-            child: Some(child),
-            permit: Some(permit),
-        },
-        48000,
-        2,
-    )
-    .into();
+    let (decoder, ready) = Decoder::buffered(child, permit);
+    tokio::time::timeout(Duration::from_secs(20), ready).await??;
+    let input: Input = RawAdapter::new(decoder, 48000, 2).into();
     // Songbird parses the header on a blocking worker, never on the command task.
     let input = input
         .make_playable_async(codecs::get_codec_registry(), codecs::get_probe())
@@ -428,9 +492,18 @@ impl State {
             return;
         }
         if let Some(incoming) = &self.incoming {
-            if let Ok(Ok(info)) =
-                tokio::time::timeout(Duration::from_millis(100), incoming.handle.get_info()).await
-            {
+            let incoming_info =
+                tokio::time::timeout(Duration::from_millis(100), incoming.handle.get_info()).await;
+            if matches!(&incoming_info, Ok(Err(_))) {
+                self.incoming = None;
+                if let Some(current) = &self.current {
+                    let _ = current.handle.set_volume(OUTPUT_GAIN);
+                }
+                self.last_error =
+                    Some("Incoming crossfade source failed; outgoing volume restored.".into());
+                return;
+            }
+            if let Ok(Ok(info)) = incoming_info {
                 if info.playing.is_done() {
                     self.incoming = None;
                     if let Some(current) = &self.current {
@@ -541,14 +614,39 @@ mod tests {
             .stdout(Stdio::piped())
             .spawn()
             .unwrap();
-        drop(Decoder {
-            child: Some(child),
-            permit: Some(permit),
-        });
+        let (decoder, _ready) = Decoder::buffered(child, permit);
+        drop(decoder);
         let recovered = tokio::time::timeout(Duration::from_secs(3), slots.acquire())
             .await
             .unwrap()
             .unwrap();
         drop(recovered);
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn short_pcm_source_becomes_ready_and_preserves_bytes() {
+        let slots = Arc::new(Semaphore::new(1));
+        let permit = slots.acquire_owned().await.unwrap();
+        let child = Command::new("python3")
+            .args([
+                "-c",
+                "import sys; sys.stdout.buffer.write(bytes(range(256))*60)",
+            ])
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let (mut decoder, ready) = Decoder::buffered(child, permit);
+        tokio::time::timeout(Duration::from_secs(3), ready)
+            .await
+            .unwrap()
+            .unwrap();
+        let bytes = tokio::task::spawn_blocking(move || {
+            let mut bytes = Vec::new();
+            decoder.read_to_end(&mut bytes).unwrap();
+            bytes
+        })
+        .await
+        .unwrap();
+        assert_eq!(bytes, (0..60).flat_map(|_| 0..=255u8).collect::<Vec<_>>());
     }
 }

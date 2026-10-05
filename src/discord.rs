@@ -266,10 +266,7 @@ impl App {
                     .await?
             }
             "ping" => "Command handler is online.".into(),
-            "help" => format!(
-                "{}: /play, /join, /pause, /skip, /stop, /disconnect, /queue, /nowplaying, /crossfade, /ping. Playback: YouTube (including Music URLs), SoundCloud and Bandcamp public media. Crossfade uses two simultaneous tracks; enable it with /crossfade. Saved playlists, seeking and additional providers are planned.",
-                self.identity(ctx, guild).await
-            ),
+            "help" => "/play, /join, /pause, /skip, /stop, /disconnect, /queue, /nowplaying, /crossfade, /ping. Playback: YouTube (including Music URLs), SoundCloud and Bandcamp public media. Crossfade uses two simultaneous tracks; enable it with /crossfade. Saved playlists, seeking and additional providers are planned.".into(),
             _ => bail!("Unknown command."),
         };
         Ok((content, empty))
@@ -426,6 +423,11 @@ impl EventHandler for App {
     ) {
         if event.new != serenity::gateway::ConnectionStage::Connected {
             self.healthy.store(false, Ordering::SeqCst);
+        }
+    }
+    async fn resume(&self, _ctx: Context, _event: ResumedEvent) {
+        if self.registered.load(Ordering::SeqCst) {
+            self.healthy.store(true, Ordering::SeqCst);
         }
     }
     async fn voice_state_update(&self, ctx: Context, _old: Option<VoiceState>, new: VoiceState) {

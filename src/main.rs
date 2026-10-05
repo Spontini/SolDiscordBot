@@ -68,7 +68,10 @@ async fn main() -> Result<()> {
         .filename_prefix("bot")
         .max_log_files(4)
         .build(log_dir)?;
-    let (writer, _guard) = tracing_appender::non_blocking(appender);
+    let (writer, _guard) = tracing_appender::non_blocking::NonBlockingBuilder::default()
+        .buffered_lines_limit(1024)
+        .lossy(true)
+        .finish(appender);
     tracing_subscriber::fmt()
         .with_ansi(false)
         .with_env_filter("soldiscordbot=info,serenity=error,songbird=error")

@@ -2,7 +2,7 @@
 
 Rust + Serenity 0.12.5 + Songbird 0.6.0 music foundation for an Orange Pi Zero 3 running ARM64 DietPi. The owner confirmed this stack on 5 October 2026.
 
-Implemented: `/play`, `/join`, `/disconnect`, `/pause`, `/skip`, `/stop`, `/queue`, `/nowplaying`, `/crossfade`, `/ping`, `/help`, playback buttons and expiring release-selection menus. Guild help uses the bot nickname, falling back to the Developer Portal application name. YouTube (including Music URLs), SoundCloud and Bandcamp public tracks/playlists use bounded yt-dlp extraction; other providers return capability errors.
+Implemented: `/play`, `/join`, `/disconnect`, `/pause`, `/skip`, `/stop`, `/queue`, `/nowplaying`, `/crossfade`, `/ping`, `/help`, playback buttons and expiring release-selection menus. Guild responses use the bot nickname, falling back to the Developer Portal application name. YouTube (including Music URLs), SoundCloud and Bandcamp public tracks/playlists use bounded yt-dlp extraction; other providers return capability errors.
 
 `/play position:Next` preserves playlist order ahead of queued tracks. `position:Now` interrupts both active sources. Search ranking penalizes unintended covers/live/remixes and asks you to select when confidence or separation is low. Metadata hints and verified uploaders do not establish release ownership.
 
@@ -15,7 +15,7 @@ Crossfade uses Songbird's additive mixer with two concurrent FFmpeg sources. Lin
 3. Run `docker compose config`, then `docker compose up --build -d`. The first native ARM64 build may take substantial time; CI also checks an ARM64 container build.
 4. Use `/join`, `/play`, then `/crossfade enabled:true seconds:5 curve:equal_power` with at least two queued finite tracks.
 
-The container is non-root, read-only, capped at one connected guild, two decoder processes, one extractor, eight pending searches and 200 queued tracks. All runtime writes use bounded tmpfs mounts; Docker logging is disabled. Queue/crossfade settings are RAM-only and reset on restart. No token or credentials are included.
+The container is non-root, read-only, capped at one connected guild, two decoder processes, one extractor, eight pending searches and 200 queued tracks. Ten-second PCM buffers are bounded per source. All runtime writes use bounded tmpfs mounts; Docker logging is disabled. Queue/crossfade settings are RAM-only and reset on restart. No token or credentials are included.
 
 For local Linux development, install Rust 1.99.0, CMake, pkg-config, libopus development headers, FFmpeg, Python and Node 24; install `yt-dlp[default]==2026.8.19` into an isolated environment. Export the two Discord variables, then `cargo run --locked`. Without Compose, logs and heartbeat default to the OS temp directory: configure RAM paths explicitly for deployment.
 

@@ -1,6 +1,6 @@
 # Provider capabilities and intelligent resolution
 
-Status: integration plan; no adapters implemented yet. A provider name in the requirements is not evidence of full-track playback access.
+Status: initial yt-dlp adapters exist for public YouTube/YouTube Music URLs, SoundCloud and Bandcamp media; live provider reliability testing remains pending. Other adapters remain planned. A provider name in the requirements is not evidence of full-track playback access.
 
 ## Capability matrix
 
