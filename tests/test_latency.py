@@ -15,6 +15,7 @@ import worker
 URL = 'https://www.youtube.com/watch?v=fixture'
 SHORT = 'https://youtu.be/fixture'
 INFO = {'id': 'fixture', 'title': 'Fixture', 'webpage_url': URL,
+        'format_id': '251',
         'duration': 120, 'url': 'https://cdn.googlevideo.com/audio?expire=1700001000',
         'http_headers': {'User-Agent': 'fixture'}, 'formats': [{'url': 'private'}]}
 
@@ -45,6 +46,11 @@ class Cache(unittest.TestCase):
         self.cache.clear()
         self.cache.put(URL, INFO, 0)
         self.assertIsNone(self.cache.get(URL))
+
+    def test_flat_webpage_reference_does_not_replace_stream_extraction(self):
+        for info in (dict(INFO, _type='url'), {'title': 'Fixture', 'url': URL}):
+            self.cache.put(URL, info, 0)
+            self.assertIsNone(self.cache.get(URL))
 
     def test_bounds_and_noncacheable_results(self):
         for i in range(100):
