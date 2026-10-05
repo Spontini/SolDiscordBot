@@ -1,6 +1,8 @@
 """Run as UID 10001 inside the actual protected media container in Linux CI."""
 import os
 import socket
+import subprocess
+import sys
 import urllib.request
 
 
@@ -42,6 +44,24 @@ udp_blocked(('172.30.90.1', 5353), b'fixture')
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 with opener.open('http://172.30.90.1:40001/fixture', timeout=5) as response:
     assert response.read() == b'proxy-fixture'
+
+# Exercise the real HTTPS decoder command through the protected namespace.
+# The local fixture records CONNECT and deliberately rejects the tunnel.
+# Observing that request proves FFmpeg opened its nested proxy transport
+# through the relay. Missing httpproxy fails before any CONNECT is sent.
+# This is a transport regression probe, not a successful media/TLS playback test.
+sys.path.insert(0, '/opt/media')
+from worker import ffmpeg_command
+
+decoder = subprocess.run(
+    ffmpeg_command({'url': 'https://example.org/fixture.wav'}),
+    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+    stderr=subprocess.PIPE, timeout=10)
+assert decoder.returncode != 0, 'CONNECT rejection fixture unexpectedly decoded audio'
+with opener.open('http://172.30.90.1:40001/connect_seen', timeout=5) as response:
+    assert response.read() == b'yes', 'FFmpeg did not send CONNECT through the relay'
+assert b'not on whitelist' not in decoder.stderr, 'FFmpeg proxy transport was denied'
+print('FFmpeg HTTPS CONNECT reached the relay fixture through the protected namespace.')
 
 # Docker exec is UID 10001; verify the real running worker dropped all capabilities.
 checked = 0
