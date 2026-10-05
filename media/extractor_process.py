@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 from common import event
+from request_timings import safe_metrics
 
 LIMIT = 2 * 1024 * 1024
 
@@ -88,6 +89,10 @@ class ExtractorProcess:
                 if line is None:
                     raise RuntimeError('extractor_protocol_failed')
                 reply = json.loads(line)
+                if not isinstance(reply, dict):
+                    raise RuntimeError('extractor_protocol_failed')
+                if 'http' in reply:
+                    event('extraction_http_timings', **safe_metrics(reply))
                 if reply.get('ok') is not True or not isinstance(reply.get('info'), dict):
                     raise RuntimeError('extractor_failed')
                 with self.lock:
