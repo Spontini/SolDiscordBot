@@ -9,6 +9,8 @@ publish = false
 anyhow = "1.0.104"
 serenity = { version = "=0.12.5", default-features = false, features = ["builder", "cache", "client", "gateway", "http", "model", "rustls_backend"] }
 songbird = { version = "=0.6.0", default-features = false, features = ["driver", "gateway", "rustls", "serenity", "tungstenite"] }
+# Songbird disables Symphonia defaults; RawAdapter requires the PCM decoder.
+symphonia = { version = "=0.5.5", default-features = false, features = ["pcm"] }
 tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "process", "signal", "sync", "time", "io-util", "net", "fs"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
