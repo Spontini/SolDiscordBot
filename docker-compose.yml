@@ -1,0 +1,43 @@
+name: soldiscordbot
+
+services:
+  bot:
+    build: .
+    image: ${BOT_IMAGE:-soldiscordbot:local}
+    platform: linux/arm64
+    restart: unless-stopped
+    init: true
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    cpus: 3.0
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    pids_limit: 128
+    stop_grace_period: 20s
+    environment:
+      DISCORD_TOKEN: ${DISCORD_TOKEN:?Set DISCORD_TOKEN in an untracked .env file}
+      DISCORD_TEST_GUILD_ID: ${DISCORD_TEST_GUILD_ID:-}
+      TMPDIR: /tmp
+      HOME: /tmp
+      XDG_CACHE_HOME: /tmp/cache
+      PYTHONDONTWRITEBYTECODE: "1"
+      SOL_LOG_DIR: /var/log/sol
+      SOL_HEALTH_PATH: /run/sol/health
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=100663296,mode=1777
+      - /run/sol:rw,noexec,nosuid,nodev,size=8388608,mode=0700,uid=10001,gid=10001
+      - /var/log/sol:rw,noexec,nosuid,nodev,size=16777216,mode=0700,uid=10001,gid=10001
+    logging:
+      driver: "none"
+    healthcheck:
+      test: [CMD, /usr/local/bin/soldiscordbot, --healthcheck]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 60s
+    # Gateway + voice are outbound. No incoming service ports are published.
+
+# Songbird runs in process; there are no external audio services.

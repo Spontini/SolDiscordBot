@@ -1,36 +1,32 @@
 # SolDiscordBot
 
-A multi-purpose Discord bot suite, beginning with an advanced music module designed for an Orange Pi Zero 3 running DietPi and Docker Compose.
+Rust + Serenity 0.12.5 + Songbird 0.6.0 music foundation for an Orange Pi Zero 3 running ARM64 DietPi. The owner confirmed this stack on 5 October 2026.
 
-## Project status
+Implemented: `/play`, `/join`, `/disconnect`, `/pause`, `/skip`, `/stop`, `/queue`, `/nowplaying`, `/crossfade`, `/ping`, `/help`, playback buttons and expiring release-selection menus. Guild responses use the bot nickname, falling back to the Developer Portal application name. YouTube (including Music URLs), SoundCloud and Bandcamp public tracks/playlists use bounded yt-dlp extraction; other providers return capability errors.
 
-Requirements captured; stack and audio engine selection pending. This repository is the project starting point and does not yet contain a runnable bot.
+`/play position:Next` preserves playlist order ahead of queued tracks. `position:Now` interrupts both active sources. Search ranking penalizes unintended covers/live/remixes and asks you to select when confidence or separation is low. Metadata hints and verified uploaders do not establish release ownership.
 
-The development brief requires research and stack confirmation before implementation. See [the original project brief](docs/project-brief.md) and [the roadmap](docs/roadmap.md).
+Crossfade uses Songbird's additive mixer with two concurrent FFmpeg sources. Linear/equal-power envelopes run at a 20 ms control cadence from consumed media time; pausing freezes both sources. Known-duration tracks overlap for 3–10 seconds when preparation finishes in time. Late, live, or unknown-duration tracks advance normally. This is implemented overlap, but recorded voice continuity and audible-click testing remain deployment gates.
 
-## Deployment target
+## Run on ARM64
 
-- Orange Pi Zero 3: ARM64 Cortex-A53, 4 GB RAM.
-- DietPi on microSD storage.
-- Docker Compose with `restart: unless-stopped`.
-- RAM-backed temporary audio buffers, transcode caches, and frequent logs to reduce microSD writes.
+1. Install Docker and Compose on DietPi. Clone this repository and check out the PR branch during development.
+2. Copy `.env.example` to `.env`; set `DISCORD_TOKEN` and `DISCORD_TEST_GUILD_ID`. Invite the application with `bot` and `applications.commands` scopes, with View Channel, Connect and Speak permissions. Guilds and Guild Voice States are the only gateway intents; no privileged intents are required.
+3. Run `docker compose config`, then `docker compose up --build -d`. The first native ARM64 build may take substantial time; CI also checks an ARM64 container build.
+4. Use `/join`, `/play`, then `/crossfade enabled:true seconds:5 curve:equal_power` with at least two queued finite tracks.
 
-## Music module goals
+The container is non-root, read-only, capped at one connected guild, two decoder processes, one extractor, eight pending searches and 200 queued tracks. Ten-second PCM buffers are bounded per source. All runtime writes use bounded tmpfs mounts; Docker logging is disabled. Queue/crossfade settings are RAM-only and reset on restart. No token or credentials are included.
 
-- Application slash commands and interactive buttons, modals, and select menus.
-- Asynchronous search, resolution, queueing, and playback.
-- Guild-specific nickname with a fallback to the global application name.
-- Search ranking that favors official and studio releases unless the user requests another version.
-- Playback and queue controls, saved playlists, seeking, repeat modes, volume, filters, lyrics, history, and server settings.
-- True overlapping audio crossfades with configurable transitions from 3 to 10 seconds.
-- Provider coverage goals: YouTube, YouTube Music, SoundCloud, Deezer, Apple Music, Bandcamp, and Spotify.
+For local Linux development, install Rust 1.99.0, CMake, pkg-config, libopus development headers, FFmpeg, Python and Node 24; install `yt-dlp[default]==2026.8.19` into an isolated environment. Export the two Discord variables, then `cargo run --locked`. Without Compose, logs and heartbeat default to the OS temp directory: configure RAM paths explicitly for deployment.
 
-Provider playback capabilities, metadata-only integrations, and resource limits must be verified during research; these goals are not claims of implemented support.
+## Verify
 
-## Next milestone
+```sh
+cargo fmt --all --check
+cargo test --locked
+cargo clippy --locked --all-targets -- -D warnings
+```
 
-Compare current Discord libraries and audio engines, validate true crossfading on ARM64, and submit a stack proposal with a RAM-backed Docker Compose outline for confirmation.
+CI executes these checks and builds/runs the ARM64 image's dependency tools. Tests cover version ranking, Unicode queries, ambiguity, playlist insertion, queue limits, simultaneous signal gains, stale playback requests, preparation cancellation and decoder-process cleanup. They do not replace a live Discord voice test or an Orange Pi benchmark.
 
-## Secrets
-
-Keep Discord tokens and provider credentials outside version control. Use environment variables or deployment secrets; only placeholder configuration examples should be committed.
+See [deployment](docs/deployment.md), [validation](docs/validation.md), [architecture](docs/architecture.md), [provider capabilities](docs/providers.md), [roadmap](docs/roadmap.md) and the [original brief](docs/project-brief.md). Saved playlists, SQLite settings, seek, filters, lyrics, history, loop/shuffle, DJ roles, announcements and additional provider adapters remain future milestones.
