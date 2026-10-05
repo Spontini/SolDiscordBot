@@ -1,5 +1,7 @@
 # Development Roadmap
 
+Current milestone: research and architecture proposal prepared; owner stack confirmation pending. No application code or target-device benchmark is complete. Review [the stack proposal](stack-proposal.md) before implementation.
+
 ## 1. Research and stack proposal
 
 - Compare maintained languages and Discord wrappers against the current Discord voice and application-command requirements.

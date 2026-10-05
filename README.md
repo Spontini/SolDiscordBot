@@ -4,7 +4,7 @@ A multi-purpose Discord bot suite, beginning with an advanced music module desig
 
 ## Project status
 
-Requirements captured; stack and audio engine selection pending. This repository is the project starting point and does not yet contain a runnable bot.
+Requirements and architecture proposal prepared; stack confirmation pending. This repository does not yet contain a runnable bot.
 
 The development brief requires research and stack confirmation before implementation. See [the original project brief](docs/project-brief.md) and [the roadmap](docs/roadmap.md).
 
@@ -29,7 +29,9 @@ Provider playback capabilities, metadata-only integrations, and resource limits 
 
 ## Next milestone
 
-Compare current Discord libraries and audio engines, validate true crossfading on ARM64, and submit a stack proposal with a RAM-backed Docker Compose outline for confirmation.
+Confirm the proposed **Rust + Serenity + Songbird** stack, then implement guild identity, intelligent /play and actual overlapping /crossfade. Performance must be measured on the target board before increasing concurrency.
+
+Review the [stack proposal](docs/stack-proposal.md), [architecture](docs/architecture.md), [audio engine design](docs/audio-engine.md), [provider capabilities](docs/providers.md), and [Docker deployment outline](docs/deployment.md). The [docker-compose.yml](docker-compose.yml) is a guarded design outline with a placeholder image, not a working deployment.
 
 ## Secrets
 
