@@ -1,7 +1,7 @@
 use crate::model::{Media, confident, score};
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
-use std::{net::IpAddr, process::Stdio, sync::Arc, time::Duration};
+use std::{process::Stdio, sync::Arc, time::Duration};
 use tokio::{io::AsyncReadExt, process::Command, sync::Semaphore};
 use url::Url;
 
@@ -18,7 +18,6 @@ pub enum Resolution {
 }
 pub struct Stream {
     pub url: String,
-    pub headers: String,
     pub duration: Option<f64>,
 }
 
@@ -126,35 +125,20 @@ impl Resolver {
         let _permit = tokio::time::timeout(Duration::from_secs(45), self.gate.acquire())
             .await
             .context("Extractor is busy. Try again shortly.")??;
-        let mut command = Command::new("yt-dlp");
+        let mut command = Command::new("python3");
         command.args([
-            "--ignore-config",
-            "--no-cache-dir",
-            "--no-warnings",
-            "--no-progress",
-            "--skip-download",
-            "--socket-timeout",
-            "15",
-            "--retries",
-            "1",
-            "--js-runtimes",
-            "node",
-            "--dump-single-json",
+            "/opt/media/client.py",
+            "extract",
+            if flat { "flat" } else { "stream" },
         ]);
-        if flat {
-            command.args(["--flat-playlist", "--playlist-end", "200"]);
-        } else {
-            command.args(["--no-playlist", "--format", "bestaudio/best"]);
-        }
         let mut child = command
-            .arg("--")
             .arg(query)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
-            .context("yt-dlp is unavailable.")?;
+            .context("Protected media client is unavailable.")?;
         let stdout = child
             .stdout
             .take()
@@ -191,7 +175,7 @@ impl Resolver {
             }
             serde_json::from_slice(&bytes).context("Provider returned invalid metadata.")
         };
-        tokio::time::timeout(Duration::from_secs(45), work)
+        tokio::time::timeout(Duration::from_secs(150), work)
             .await
             .context("Provider extraction timed out.")?
     }
@@ -248,21 +232,9 @@ impl Resolver {
             .get("url")
             .and_then(Value::as_str)
             .context("Provider supplied no playable stream.")?;
-        validate_stream(raw).await?;
-        let mut headers = String::new();
-        if let Some(map) = json.get("http_headers").and_then(Value::as_object) {
-            for key in ["User-Agent", "Referer", "Origin"] {
-                if let Some(value) = map.get(key).and_then(Value::as_str) {
-                    if value.len() > 2048 || value.contains(['\r', '\n']) {
-                        bail!("Invalid provider headers.");
-                    }
-                    headers.push_str(&format!("{key}: {value}\r\n"));
-                }
-            }
-        }
+        validate_stream(raw)?;
         Ok(Stream {
             url: raw.into(),
-            headers,
             duration: media_from_stream(&json),
         })
     }
@@ -280,53 +252,32 @@ fn media_from_stream(json: &Value) -> Option<f64> {
     }
 }
 
-fn public_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => {
-            !(ip.is_private()
-                || ip.is_loopback()
-                || ip.is_link_local()
-                || ip.is_unspecified()
-                || ip.is_broadcast()
-                || ip.is_multicast()
-                || ip.is_documentation()
-                || ip.octets()[0] == 0
-                || ip.octets()[0] >= 240
-                || (ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1])))
-        }
-        IpAddr::V6(ip) => {
-            if let Some(v4) = ip.to_ipv4_mapped() {
-                public_ip(IpAddr::V4(v4))
-            } else {
-                !(ip.is_loopback()
-                    || ip.is_unspecified()
-                    || ip.is_unique_local()
-                    || ip.is_unicast_link_local()
-                    || ip.is_multicast())
-            }
-        }
-    }
+fn validate_stream(raw: &str) -> Result<()> {
+    let base = std::env::var("SOL_MEDIA_ENDPOINT").context("Set SOL_MEDIA_ENDPOINT.")?;
+    validate_ticket(raw, &base)
 }
 
-async fn validate_stream(raw: &str) -> Result<()> {
-    let url = Url::parse(raw).context("Invalid stream URL.")?;
-    if !matches!(url.scheme(), "http" | "https")
+fn validate_ticket(raw: &str, base: &str) -> Result<()> {
+    let endpoint = Url::parse(base).context("Invalid worker endpoint.")?;
+    let url = Url::parse(raw).context("Invalid PCM ticket.")?;
+    let ticket = url.path().strip_prefix("/pcm/").unwrap_or("");
+    if endpoint.scheme() != "http"
+        || endpoint.port() != Some(8080)
+        || endpoint
+            .host_str()
+            .and_then(|s| s.parse::<std::net::Ipv4Addr>().ok())
+            .is_none_or(|ip| !ip.is_private())
+        || url.scheme() != endpoint.scheme()
+        || url.host_str() != endpoint.host_str()
+        || url.port() != endpoint.port()
         || !url.username().is_empty()
         || url.password().is_some()
-        || !matches!(url.port_or_known_default(), Some(80 | 443))
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || ticket.len() != 32
+        || !ticket.bytes().all(|b| b.is_ascii_hexdigit())
     {
-        bail!("Unsupported stream protocol.");
-    }
-    let host = url.host_str().context("Missing stream host.")?;
-    let addresses = tokio::time::timeout(
-        Duration::from_secs(5),
-        tokio::net::lookup_host((host, url.port_or_known_default().unwrap())),
-    )
-    .await
-    .context("Stream DNS timed out.")??
-    .collect::<Vec<_>>();
-    if addresses.is_empty() || addresses.iter().any(|a| !public_ip(a.ip())) {
-        bail!("Provider supplied a non-public stream address.");
+        bail!("Only private worker PCM tickets are accepted.");
     }
     Ok(())
 }
@@ -348,19 +299,20 @@ mod tests {
         assert!(supported_url("https://music.youtube.com/watch?v=x").is_ok());
     }
     #[test]
-    fn private_stream_ips_are_rejected() {
-        for ip in [
-            "127.0.0.1",
-            "10.0.0.1",
-            "169.254.1.2",
-            "100.64.0.1",
-            "::1",
-            "::ffff:127.0.0.1",
-            "fc00::1",
+    fn only_private_worker_tickets_are_accepted() {
+        let base = "http://172.30.90.2:8080";
+        let valid = format!("{base}/pcm/{}", "a".repeat(32));
+        assert!(validate_ticket(&valid, base).is_ok());
+        for invalid in [
+            "https://youtube.com/videoplayback",
+            "http://172.30.90.2:8080/pcm/../../x",
+            "http://172.30.90.4:8080/pcm/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "http://user@172.30.90.2:8080/pcm/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "http://172.30.90.2:8080/pcm/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?q=1",
         ] {
-            assert!(!public_ip(ip.parse().unwrap()));
+            assert!(validate_ticket(invalid, base).is_err());
         }
-        assert!(public_ip("8.8.8.8".parse().unwrap()));
+        assert!(validate_ticket(&valid, "http://8.8.8.8:8080").is_err());
     }
     #[test]
     fn live_and_missing_duration_stay_unknown() {

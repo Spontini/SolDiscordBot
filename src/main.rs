@@ -33,25 +33,20 @@ fn check_health() -> Result<()> {
     Ok(())
 }
 async fn verify_tools() -> Result<()> {
-    for (tool, arg) in [
-        ("ffmpeg", "-version"),
-        ("yt-dlp", "--version"),
-        ("node", "--version"),
-    ] {
-        let status = tokio::time::timeout(
-            Duration::from_secs(10),
-            tokio::process::Command::new(tool)
-                .arg(arg)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status(),
-        )
-        .await
-        .context("Dependency check timed out.")??;
-        if !status.success() {
-            bail!("Required dependency {tool} is unavailable.");
-        }
+    let status = tokio::time::timeout(
+        Duration::from_secs(15),
+        tokio::process::Command::new("python3")
+            .args(["/opt/media/client.py", "health"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .status(),
+    )
+    .await
+    .context("Media worker check timed out.")??;
+    if !status.success() {
+        bail!("Protected media worker or WARP is unavailable.");
     }
     Ok(())
 }

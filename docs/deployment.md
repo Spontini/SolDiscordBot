@@ -1,8 +1,6 @@
 # ARM64 deployment
 
-The Dockerfile builds Rust 1.99.0 with Cargo.lock and provides FFmpeg, native Opus, Node 24 and `yt-dlp[default]==2026.8.19` (including EJS). CI builds natively on an ARM64 Linux runner; Orange Pi performance still needs measurement.
-
-Copy `.env.example` to `.env`, supply the token/test guild, run `docker compose config`, then `docker compose up --build -d`. No incoming ports or external audio/database services are needed. The bot checks FFmpeg, yt-dlp and Node before opening the gateway. Command registration uses DISCORD_TEST_GUILD_ID when supplied; otherwise it registers global commands.
+The bot image builds Rust 1.99.0 with Cargo.lock and includes native Opus and a Python private-IPC client. The separate media image includes Node 26, FFmpeg, yt-dlp 2026.8.19 and BgUtils provider 2.0.1. Follow [protected media deployment](protected-media.md) to install host WARP and start all three containers. The bot checks media/WARP health before opening the gateway. Command registration uses DISCORD_TEST_GUILD_ID when supplied; otherwise it registers global commands.
 
 The runtime uses UID/GID 10001, a read-only image, dropped capabilities and no-new-privileges. Compose caps memory at 1536 MiB, equal total memory/swap, CPU at three cores and processes at 128. These values require target measurement before increasing the one-guild limit. Durable storage is not mounted because saved playlists/settings are not implemented yet.
 
@@ -21,4 +19,4 @@ Container tmpfs may reach disk through host swap unless the kernel/cgroups enfor
 
 Before production: inspect mounted tmpfs and LogConfig.Type=none, confirm read-only root writes fail, test tmpfs-full behavior, stop/restart cleanup, interrupted provider requests and pause/skip during overlap. Record decoded outbound audio for crossfade continuity and measure CPU, RSS/cgroup memory, temperature and underruns on the actual Orange Pi.
 
-Public provider pages are allowlisted and initial stream DNS addresses reject private/local ranges. FFmpeg permits only HTTP/TLS transport protocols. Redirects, HLS child URLs and DNS rebinding are not comprehensively isolated by these application checks; use deployment-level egress restrictions before exposing an untrusted public bot at scale.
+Public provider pages are allowlisted. Media extraction, token generation and decoding now run behind a namespace firewall that permits only the WARP relay. See [network enforcement and limitations](protected-media.md). The bot gets sanitized metadata and local PCM tickets; external signed URLs remain inside the worker.
