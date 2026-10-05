@@ -63,6 +63,42 @@ with opener.open('http://172.30.90.1:40001/connect_seen', timeout=5) as response
 assert b'not on whitelist' not in decoder.stderr, 'FFmpeg proxy transport was denied'
 print('FFmpeg HTTPS CONNECT reached the relay fixture through the protected namespace.')
 
+# Load the pinned yt-dlp and its plugins in the persistent server, replacing
+# only extraction with a local fixture. Verify mode switching, process reuse,
+# inherited network isolation and dropped capabilities without YouTube traffic.
+from extractor_process import ExtractorProcess
+
+script = '''
+import sys, os, socket, urllib.request
+sys.path.insert(0, '/opt/media')
+import yt_dlp
+from extract import serve
+def fixture(self, query, download=False):
+    with socket.socket() as s:
+        s.settimeout(0.1)
+        assert s.connect_ex(('1.1.1.1', 443)) != 0
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open('http://172.30.90.1:40001/fixture', timeout=5) as response:
+        assert response.read() == b'proxy-fixture'
+    return {'pid': os.getpid(), 'flat': self.params['extract_flat'],
+            'proxy': self.params['proxy'], 'url': 'https://example.org/fixture.wav'}
+yt_dlp.YoutubeDL.extract_info = fixture
+serve()
+'''
+session = ExtractorProcess([sys.executable, '-u', '-c', script], timeout=15)
+try:
+    first = session.request({'query': 'https://youtube.com/watch?v=fixture', 'flat': True})
+    second = session.request({'query': 'https://youtube.com/watch?v=fixture', 'flat': False})
+    assert first['pid'] == second['pid']
+    assert first['flat'] == 'in_playlist' and second['flat'] is False
+    assert second['proxy'] == os.environ['SOL_MEDIA_PROXY']
+    fields = dict(line.split(':', 1) for line in open(f'/proc/{first["pid"]}/status') if ':' in line)
+    assert int(fields['CapEff'].strip(), 16) == 0
+    assert int(fields['CapBnd'].strip(), 16) == 0
+finally:
+    session.close()
+print('Persistent pinned yt-dlp session reused; direct egress blocked; relay reachable; capabilities dropped.')
+
 # Docker exec is UID 10001; verify the real running worker dropped all capabilities.
 checked = 0
 for entry in os.listdir('/proc'):
