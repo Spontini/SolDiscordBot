@@ -104,10 +104,12 @@ def ffmpeg_command(info, offset=0):
             if not isinstance(value, str) or len(value) > 2048 or '\r' in value or '\n' in value:
                 raise ValueError('invalid_stream_header')
             headers += f'{name}: {value}\r\n'
+    # HTTPS through an HTTP CONNECT proxy opens FFmpeg's nested httpproxy
+    # transport. Omitting it rejects the stream before the first PCM byte.
     command = ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error',
                '-threads', '1', '-rw_timeout', '15000000', '-http_proxy', PROXY,
                '-tls_verify', '1', '-ca_file', '/etc/ssl/certs/ca-certificates.crt',
-               '-protocol_whitelist', 'http,https,tcp,tls,crypto']
+               '-protocol_whitelist', 'http,https,httpproxy,tcp,tls,crypto']
     if headers:
         command += ['-headers', headers]
     if offset:
