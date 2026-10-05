@@ -121,13 +121,26 @@ impl App {
         let manager = songbird::get(ctx)
             .await
             .context("Voice manager is unavailable.")?;
-        let call = tokio::time::timeout(Duration::from_secs(20), manager.join(guild, channel))
+        let call = match tokio::time::timeout(Duration::from_secs(20), manager.join(guild, channel))
             .await
-            .context("Voice connection timed out.")??;
         {
+            Ok(Ok(call)) => call,
+            _ => {
+                let _ = manager.remove(guild).await;
+                bail!(
+                    "Voice connection failed or timed out. Check Connect/Speak permissions and try again."
+                );
+            }
+        };
+        let setup = {
             let mut call = call.lock().await;
-            call.deafen(true).await?;
+            let result = call.deafen(true).await;
             call.set_bitrate(songbird::driver::Bitrate::Bits(96_000));
+            result
+        };
+        if setup.is_err() {
+            let _ = manager.remove(guild).await;
+            bail!("Could not configure the voice connection.");
         }
         let player = Player::new(call, self.resolver.clone(), self.decoders.clone());
         *active = Some(Active {
@@ -221,11 +234,14 @@ impl App {
             "disconnect" => {
                 let player = self.player(ctx, guild, user, false).await?;
                 let mut active = self.active.lock().await;
+                if !active.as_ref().is_some_and(|current|current.guild==guild && current.player.same_session(&player)) {
+                    bail!("The voice session changed. Try the command again.");
+                }
                 player.stop(true).await;
+                *active = None;
                 if let Some(manager) = songbird::get(ctx).await {
                     manager.remove(guild).await?;
                 }
-                *active = None;
                 "Disconnected.".into()
             }
             "queue" | "nowplaying" => {

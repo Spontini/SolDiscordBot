@@ -270,6 +270,9 @@ impl Player {
     pub fn epoch(&self) -> u64 {
         self.generation.load(Ordering::SeqCst)
     }
+    pub fn same_session(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.state, &other.state)
+    }
     pub async fn enqueue(
         &self,
         batch: Vec<Media>,
