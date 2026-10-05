@@ -42,6 +42,7 @@ def warp_ready():
     with WARP_LOCK:
         if time.monotonic() - WARP['checked'] < 30:
             return WARP['ready']
+        started = time.monotonic()
         try:
             opener = urllib.request.build_opener(urllib.request.ProxyHandler(
                 {'http': PROXY, 'https': PROXY}))
@@ -62,7 +63,11 @@ def warp_ready():
                 event('warp_egress_changed')
         except Exception as exc:
             ready = False
-            event('warp_unavailable', error_type=type(exc).__name__)
+            # URLError wraps timeouts/connect failures. Record its type only,
+            # never exception text, addresses or the trace's public IP.
+            event('warp_unavailable', error_type=type(exc).__name__,
+                  reason_type=type(getattr(exc, 'reason', exc)).__name__,
+                  elapsed_ms=int((time.monotonic() - started) * 1000))
         WARP.update(checked=time.monotonic(), ready=ready)
         return ready
 
