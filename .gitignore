@@ -1,0 +1,24 @@
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
+*.pem
+*.key
+
+# Runtime state and temporary media
+data/
+logs/
+cache/
+tmp/
+*.log
+*.sqlite
+*.sqlite3
+*.db
+
+# Editor and operating system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
