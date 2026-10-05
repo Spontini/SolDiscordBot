@@ -1,0 +1,29 @@
+name: Rust and ARM64 container
+on:
+  pull_request:
+  push:
+    branches: [main, architecture/music-stack-proposal]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y cmake pkg-config libopus-dev
+      - run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
+      - run: cargo +1.99.0 fmt --all --check
+      - run: cargo +1.99.0 test --locked
+      - run: cargo +1.99.0 clippy --locked --all-targets -- -D warnings
+  arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t soldiscordbot:ci .
+      - name: Verify ARM64 runtime tools without credentials
+        run: |
+          test "$(docker image inspect soldiscordbot:ci --format '{{.Architecture}}')" = arm64
+          docker run --rm --entrypoint sh soldiscordbot:ci -c 'ffmpeg -version >/dev/null && yt-dlp --version && node --version'

@@ -1,11 +1,9 @@
-# Architecture outline only: the application image is created after stack confirmation.
-# The proposal profile prevents accidental startup with plain `docker compose up`.
 name: soldiscordbot
 
 services:
   bot:
-    profiles: [proposal]
-    image: ${BOT_IMAGE:-soldiscordbot:proposal}
+    build: .
+    image: ${BOT_IMAGE:-soldiscordbot:local}
     platform: linux/arm64
     restart: unless-stopped
     init: true
@@ -26,31 +24,14 @@ services:
       HOME: /tmp
       XDG_CACHE_HOME: /tmp/cache
       PYTHONDONTWRITEBYTECODE: "1"
-      SOL_DATABASE_PATH: /data/sol.sqlite3
-      SOL_LOG_PATH: /var/log/sol/bot.log
-      SOL_LOG_MAX_BYTES: "2097152"
-      SOL_LOG_MAX_FILES: "4"
-      SOL_HEALTH_PATH: /run/sol/health.json
-      SOL_MAX_ACTIVE_PLAYERS: "1"
-      SOL_MAX_DECODER_INPUTS: "2"
-      SOL_MAX_EXTRACTOR_JOBS: "1"
-      SOL_MAX_QUEUE_TRACKS: "200"
-      SOL_AUDIO_BUFFER_SECONDS: "10"
-      SOL_CROSSFADE_DEFAULT_ENABLED: "false"
-      SOL_CROSSFADE_DEFAULT_SECONDS: "5"
+      SOL_LOG_DIR: /var/log/sol
+      SOL_HEALTH_PATH: /run/sol/health
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=100663296,mode=1777
       - /run/sol:rw,noexec,nosuid,nodev,size=8388608,mode=0700,uid=10001,gid=10001
       - /var/log/sol:rw,noexec,nosuid,nodev,size=16777216,mode=0700,uid=10001,gid=10001
-    volumes:
-      - type: bind
-        source: ./data
-        target: /data
-        bind:
-          create_host_path: false
     logging:
       driver: "none"
-    # Proposed future binary contract; not implemented in this design phase.
     healthcheck:
       test: [CMD, /usr/local/bin/soldiscordbot, --healthcheck]
       interval: 30s
@@ -59,4 +40,4 @@ services:
       start_period: 60s
     # Gateway + voice are outbound. No incoming service ports are published.
 
-# Songbird and SQLite are in-process dependencies, so no depends_on services exist.
+# Songbird runs in process; there are no external audio services.
