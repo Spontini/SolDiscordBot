@@ -527,6 +527,52 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn worker_float_pcm_is_playable_and_decodes_both_channels() {
+        use std::io::Cursor;
+        use symphonia::core::audio::{AudioBufferRef, Signal};
+
+        // The worker emits interleaved 48 kHz stereo float32, without a WAV
+        // header. Exercise the same adapter/registry used for live playback.
+        let mut pcm = Vec::new();
+        for _ in 0..4800 {
+            pcm.extend_from_slice(&0.25_f32.to_le_bytes());
+            pcm.extend_from_slice(&(-0.5_f32).to_le_bytes());
+        }
+        // Reproduce the previous Opus-only registry before checking the fix.
+        let mut opus_only = symphonia::core::codecs::CodecRegistry::new();
+        opus_only.register_all::<codecs::OpusDecoder>();
+        let old_input: Input = RawAdapter::new(Cursor::new(pcm.clone()), 48000, 2).into();
+        assert!(
+            old_input
+                .make_playable(
+                    &opus_only,
+                    codecs::get_probe(),
+                    &tokio::runtime::Handle::current()
+                )
+                .is_err()
+        );
+        let input: Input = RawAdapter::new(Cursor::new(pcm), 48000, 2).into();
+        let mut input = input
+            .make_playable_async(codecs::get_codec_registry(), codecs::get_probe())
+            .await
+            .expect("worker PCM must have a registered decoder");
+        let parsed = input.parsed_mut().expect("PCM source must be parsed");
+        let packet = parsed.format.next_packet().expect("PCM packet");
+        let decoded = parsed.decoder.decode(&packet).expect("decode worker PCM");
+        assert_eq!(decoded.spec().rate, 48000);
+        assert_eq!(decoded.spec().channels.count(), 2);
+        assert!(decoded.frames() > 0);
+        match decoded {
+            AudioBufferRef::F32(buffer) => {
+                assert!(buffer.chan(0).iter().all(|&sample| sample == 0.25));
+                assert!(buffer.chan(1).iter().all(|&sample| sample == -0.5));
+            }
+            _ => panic!("worker PCM must remain float32"),
+        }
+    }
+
     fn media() -> Media {
         Media {
             title: "Fixture".into(),
