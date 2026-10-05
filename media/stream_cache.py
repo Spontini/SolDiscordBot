@@ -37,7 +37,10 @@ class StreamCache:
 
     def put(self, query, info, generation):
         # Flat search/playlist entries have no playable selected stream.
-        if info.get('entries') is not None or info.get('is_live') or info.get('live_status') == 'is_live':
+        if (info.get('entries') is not None or info.get('is_live')
+                or info.get('live_status') == 'is_live'
+                or info.get('_type', 'video') != 'video'
+                or not isinstance(info.get('format_id'), str)):
             return
         url = urllib.parse.urlsplit(info.get('url', ''))
         if url.scheme != 'https':
