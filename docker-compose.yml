@@ -26,6 +26,14 @@ services:
       PYTHONDONTWRITEBYTECODE: "1"
       SOL_LOG_DIR: /var/log/sol
       SOL_HEALTH_PATH: /run/sol/health
+      SOL_MEDIA_ENDPOINT: http://172.30.90.2:8080
+    networks:
+      default: {}
+      media:
+        ipv4_address: 172.30.90.3
+    depends_on:
+      media:
+        condition: service_healthy
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=100663296,mode=1777
       - /run/sol:rw,noexec,nosuid,nodev,size=8388608,mode=0700,uid=10001,gid=10001
@@ -40,4 +48,71 @@ services:
       start_period: 60s
     # Gateway + voice are outbound. No incoming service ports are published.
 
-# Songbird runs in process; there are no external audio services.
+  media:
+    build:
+      context: .
+      dockerfile: media/Dockerfile
+    image: soldiscordbot-media:local
+    platform: linux/arm64
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    # Removed from the process bounding set before running application code.
+    cap_add: [NET_ADMIN, SETUID, SETGID, SETPCAP]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 768m
+    memswap_limit: 768m
+    cpus: 2.0
+    pids_limit: 96
+    environment:
+      SOL_MEDIA_PROXY: http://172.30.90.1:40001
+      SOL_WORKER_IP: 172.30.90.2
+      SOL_BOT_IP: 172.30.90.3
+      NO_PROXY: ""
+    networks:
+      media:
+        ipv4_address: 172.30.90.2
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=134217728,mode=1777
+      - /var/log/sol:rw,noexec,nosuid,nodev,size=8388608,mode=0700,uid=10001,gid=10001
+    logging:
+      driver: "none"
+    healthcheck:
+      test: [CMD, python3, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=8)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on: [warp-bridge]
+
+  warp-bridge:
+    build:
+      context: .
+      dockerfile: media/Dockerfile.bridge
+    # Only this fixed-destination relay uses host networking. It binds the private
+    # Docker gateway, allows just the media IP, and connects to loopback WARP.
+    network_mode: host
+    platform: linux/arm64
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 64m
+    memswap_limit: 64m
+    pids_limit: 32
+    environment:
+      SOL_BRIDGE_IP: 172.30.90.1
+      SOL_WORKER_IP: 172.30.90.2
+    logging:
+      driver: "none"
+
+networks:
+  media:
+    internal: true
+    enable_ipv6: false
+    ipam:
+      config:
+        - subnet: 172.30.90.0/24
+          gateway: 172.30.90.1

@@ -148,35 +148,10 @@ async fn prepare(
     let stream = resolver.stream(&media).await?;
     media.duration = stream.duration;
     let permit = decoders.acquire_owned().await?;
-    let mut command = Command::new("ffmpeg");
-    command.args([
-        "-nostdin",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-threads",
-        "1",
-        "-rw_timeout",
-        "15000000",
-        "-protocol_whitelist",
-        "http,https,tcp,tls,crypto",
-    ]);
-    if !stream.headers.is_empty() {
-        command.arg("-headers").arg(&stream.headers);
-    }
+    // The worker supplies already-decoded PCM. The bot never opens CDN URLs.
+    let mut command = Command::new("python3");
     let child = command
-        .args([
-            "-i",
-            &stream.url,
-            "-vn",
-            "-ac",
-            "2",
-            "-ar",
-            "48000",
-            "-f",
-            "f32le",
-            "pipe:1",
-        ])
+        .args(["/opt/media/client.py", "pcm", &stream.url])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

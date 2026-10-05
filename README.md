@@ -12,12 +12,12 @@ Crossfade uses Songbird's additive mixer with two concurrent FFmpeg sources. Lin
 
 1. Install Docker and Compose on DietPi. Clone this repository and check out the PR branch during development.
 2. Copy `.env.example` to `.env`; set `DISCORD_TOKEN` and `DISCORD_TEST_GUILD_ID`. Invite the application with `bot` and `applications.commands` scopes, with View Channel, Connect and Speak permissions. Guilds and Guild Voice States are the only gateway intents; no privileged intents are required.
-3. Run `docker compose config`, then `docker compose up --build -d`. The first native ARM64 build may take substantial time; CI also checks an ARM64 container build.
+3. Follow [protected media setup](docs/protected-media.md) to install host WARP in proxy mode and check subnet overlap. Run `docker compose config --quiet`, then `docker compose up --build -d`. The first native ARM64 build may take substantial time; CI also checks an ARM64 container build.
 4. Use `/join`, `/play`, then `/crossfade enabled:true seconds:5 curve:equal_power` with at least two queued finite tracks.
 
 The container is non-root, read-only, capped at one connected guild, two decoder processes, one extractor, eight pending searches and 200 queued tracks. Ten-second PCM buffers are bounded per source. All runtime writes use bounded tmpfs mounts; Docker logging is disabled. Queue/crossfade settings are RAM-only and reset on restart. No token or credentials are included.
 
-For local Linux development, install Rust 1.99.0, CMake, pkg-config, libopus development headers, FFmpeg, Python and Node 24; install `yt-dlp[default]==2026.8.19` into an isolated environment. Export the two Discord variables, then `cargo run --locked`. Without Compose, logs and heartbeat default to the OS temp directory: configure RAM paths explicitly for deployment.
+Media now runs in a separate worker: yt-dlp, BgUtils token caching/local fallback and FFmpeg share WARP egress enforced by nftables. The bot receives private PCM tickets and keeps normal Discord networking. Local runs require the worker, Python 3, `/opt/media/client.py` and `SOL_MEDIA_ENDPOINT`; direct extraction is disabled. See [complete code and WARP instructions](docs/protected-media.md).
 
 ## Verify
 
@@ -25,8 +25,9 @@ For local Linux development, install Rust 1.99.0, CMake, pkg-config, libopus dev
 cargo fmt --all --check
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
+python3 -m unittest discover -s tests -p test_media.py -v
 ```
 
-CI executes these checks and builds/runs the ARM64 image's dependency tools. Tests cover version ranking, Unicode queries, ambiguity, playlist insertion, queue limits, simultaneous signal gains, stale playback requests, preparation cancellation and decoder-process cleanup. They do not replace a live Discord voice test or an Orange Pi benchmark.
+CI executes these checks and builds/runs the ARM64 images, checks provider compatibility, and tests the media firewall with a local proxy fixture. Tests cover version ranking, Unicode queries, ambiguity, playlist insertion, queue limits, simultaneous signal gains, stale playback requests, preparation cancellation and decoder-process cleanup. They do not replace a live Discord voice test or an Orange Pi benchmark.
 
 See [deployment](docs/deployment.md), [validation](docs/validation.md), [architecture](docs/architecture.md), [provider capabilities](docs/providers.md), [roadmap](docs/roadmap.md) and the [original brief](docs/project-brief.md). Saved playlists, SQLite settings, seek, filters, lyrics, history, loop/shuffle, DJ roles, announcements and additional provider adapters remain future milestones.
