@@ -72,26 +72,36 @@ script = '''
 import sys, os, socket, urllib.request
 sys.path.insert(0, '/opt/media')
 import yt_dlp
+from yt_dlp.networking.common import Request
 from extract import serve
 def fixture(self, query, download=False):
+    youtube = self.get_info_extractor('Youtube')
+    assert youtube._configuration_arg('skip') == self.params['extractor_args']['youtube'].get('skip', [])
+    assert youtube._configuration_arg('player_skip') == self.params['extractor_args']['youtube'].get('player_skip', [])
     with socket.socket() as s:
         s.settimeout(0.1)
         assert s.connect_ex(('1.1.1.1', 443)) != 0
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with opener.open('http://172.30.90.1:40001/fixture', timeout=5) as response:
+    # Use the real pinned yt-dlp Response through its mandatory proxy, including
+    # the production open/read timing wrappers (no direct fixture shortcut).
+    with self.urlopen(Request('http://example.org/fixture')) as response:
         assert response.read() == b'proxy-fixture'
     return {'pid': os.getpid(), 'flat': self.params['extract_flat'],
-            'proxy': self.params['proxy'], 'url': 'https://example.org/fixture.wav'}
+            'proxy': self.params['proxy'], 'url': 'https://example.org/fixture.wav',
+            'title': 'Fixture', 'format_id': '251',
+            'skip': self.params['extractor_args']['youtube'].get('skip', [])}
 yt_dlp.YoutubeDL.extract_info = fixture
 serve()
 '''
 session = ExtractorProcess([sys.executable, '-u', '-c', script], timeout=15)
 try:
-    first = session.request({'query': 'https://youtube.com/watch?v=fixture', 'flat': True})
-    second = session.request({'query': 'https://youtube.com/watch?v=fixture', 'flat': False})
+    first = session.request({'query': 'https://youtube.com/watch?v=fixture1234', 'flat': True})
+    second = session.request({'query': 'https://youtube.com/watch?v=fixture1234', 'flat': False})
     assert first['pid'] == second['pid']
     assert first['flat'] == 'in_playlist' and second['flat'] is False
     assert second['proxy'] == os.environ['SOL_MEDIA_PROXY']
+    assert first['skip'] == second['skip'] == ['hls', 'dash']
+    full = session.request({'query': 'ytsearch10:fixture', 'flat': True})
+    assert full['skip'] == [] and full['pid'] == first['pid']
     fields = dict(line.split(':', 1) for line in open(f'/proc/{first["pid"]}/status') if ':' in line)
     assert int(fields['CapEff'].strip(), 16) == 0
     assert int(fields['CapBnd'].strip(), 16) == 0
