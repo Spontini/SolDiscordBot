@@ -66,3 +66,40 @@ proxy reachability, actual Response timing wrappers, profile switching and
 dropped capabilities. Profile regressions cover live/missing-format/error
 fallback and restoring settings for the next provider. Live playback and the
 speed gain from the fast profile remain deployment checks rather than CI claims.
+
+## Command responsiveness
+
+The earlier command handler deferred every interaction, awaited a nickname
+REST lookup on a cold/expired identity cache, then edited the deferred reply.
+Even `/ping` could wait for three HTTP requests. It now returns a final
+ephemeral callback in one request. Other controls use a 20 ms local completion
+budget: ready results reply directly; unfinished work is deferred and resumed
+once without cancellation. `/join` and `/play` acknowledge before their long
+operation. A failed acknowledgement does not start either long operation.
+
+Guild identities are prewarmed on guild creation and refreshed in the
+background with a two-second timeout and the existing five-minute cache.
+Replies use the cached name, gateway member nickname or application name
+immediately. Member updates invalidate stale background completions; refresh
+results never overwrite a newer nickname event. No privileged intent is added.
+
+Voice join/leave operations no longer hold the shared active-state lock during
+network or player I/O. Concurrent transitions receive a busy response.
+`/disconnect` in the same guild/channel can cancel a pending join immediately;
+the join task removes its call and cannot publish a cancelled player.
+
+`command_received.gateway_delay_ms` measures interaction age from its Discord
+snowflake timestamp (requires a correctly synchronized system clock).
+`command_initial_response.request_ms` measures the deferred callback request.
+`command_work_complete.elapsed_ms` is cumulative handler time, including the
+initial acknowledgement for deferred commands. `command_complete` records
+response request time, cumulative handler time, success and whether the
+response was deferred. These omit tokens, IDs, queries and exception messages.
+They cannot measure the user's client rendering time. `voice_disconnect_complete`
+measures established-session cleanup; `voice_join_complete` measures the
+actual voice handshake. Run `/ping`, `/join`, `/disconnect` and read the bot
+log. Slow `request_ms` values indicate an HTTP/network/rate-limit wait that
+local handler optimizations cannot eliminate.
+
+This command update changes Rust code, so it requires rebuilding the bot image.
+No live DietPi command-latency or comparison with another bot is claimed by CI.
