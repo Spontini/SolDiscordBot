@@ -63,18 +63,69 @@ with opener.open('http://172.30.90.1:40001/connect_seen', timeout=5) as response
 assert b'not on whitelist' not in decoder.stderr, 'FFmpeg proxy transport was denied'
 print('FFmpeg HTTPS CONNECT reached the relay fixture through the protected namespace.')
 
+# Load the pinned yt-dlp and its plugins in the persistent server, replacing
+# only extraction with a local fixture. Verify mode switching, process reuse,
+# inherited network isolation and dropped capabilities without YouTube traffic.
+from extractor_process import ExtractorProcess
+
+script = '''
+import sys, os, socket, urllib.request
+sys.path.insert(0, '/opt/media')
+import yt_dlp
+from yt_dlp.networking.common import Request
+from extract import serve
+def fixture(self, query, download=False):
+    youtube = self.get_info_extractor('Youtube')
+    assert youtube._configuration_arg('skip') == self.params['extractor_args']['youtube'].get('skip', [])
+    assert youtube._configuration_arg('player_skip') == self.params['extractor_args']['youtube'].get('player_skip', [])
+    with socket.socket() as s:
+        s.settimeout(0.1)
+        assert s.connect_ex(('1.1.1.1', 443)) != 0
+    # Use the real pinned yt-dlp Response through its mandatory proxy, including
+    # the production open/read timing wrappers (no direct fixture shortcut).
+    with self.urlopen(Request('http://example.org/fixture')) as response:
+        assert response.read() == b'proxy-fixture'
+    return {'pid': os.getpid(), 'flat': self.params['extract_flat'],
+            'proxy': self.params['proxy'], 'url': 'https://example.org/fixture.wav',
+            'title': 'Fixture', 'format_id': '251',
+            'skip': self.params['extractor_args']['youtube'].get('skip', [])}
+yt_dlp.YoutubeDL.extract_info = fixture
+serve()
+'''
+session = ExtractorProcess([sys.executable, '-u', '-c', script], timeout=15)
+try:
+    first = session.request({'query': 'https://youtube.com/watch?v=fixture1234', 'flat': True})
+    second = session.request({'query': 'https://youtube.com/watch?v=fixture1234', 'flat': False})
+    assert first['pid'] == second['pid']
+    assert first['flat'] == 'in_playlist' and second['flat'] is False
+    assert second['proxy'] == os.environ['SOL_MEDIA_PROXY']
+    assert first['skip'] == second['skip'] == ['hls', 'dash']
+    full = session.request({'query': 'ytsearch10:fixture', 'flat': True})
+    assert full['skip'] == [] and full['pid'] == first['pid']
+    fields = dict(line.split(':', 1) for line in open(f'/proc/{first["pid"]}/status') if ':' in line)
+    assert int(fields['CapEff'].strip(), 16) == 0
+    assert int(fields['CapBnd'].strip(), 16) == 0
+finally:
+    session.close()
+print('Persistent pinned yt-dlp session reused; direct egress blocked; relay reachable; capabilities dropped.')
+
 # Docker exec is UID 10001; verify the real running worker dropped all capabilities.
 checked = 0
+warm_extractors = 0
 for entry in os.listdir('/proc'):
     if entry.isdigit():
         try:
             command = open(f'/proc/{entry}/cmdline', 'rb').read()
-            if b'/opt/media/worker.py' in command or b'/opt/bgutil/build/main.js' in command:
+            if (b'/opt/media/worker.py' in command or b'/opt/bgutil/build/main.js' in command
+                    or b'/opt/media/extract.py' in command):
                 fields = dict(line.split(':', 1) for line in open(f'/proc/{entry}/status') if ':' in line)
                 assert int(fields['CapEff'].strip(), 16) == 0
                 assert int(fields['CapBnd'].strip(), 16) == 0
                 checked += 1
+                if b'/opt/media/extract.py' in command:
+                    warm_extractors += 1
         except (FileNotFoundError, PermissionError):
             pass
 assert checked >= 1, 'no protected application process inspected'
+assert warm_extractors >= 1, 'production warm extractor not inspected'
 print('Direct IPv4/IPv6/DNS blocked; proxy relay reachable; application capabilities dropped.')

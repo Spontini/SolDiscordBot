@@ -17,8 +17,10 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from common import configure_logging, event, run_bounded
+from common import configure_logging, event
 from extract import validate_query
+from extractor_process import ExtractorProcess
+from stream_cache import StreamCache
 from tokens import LEASE_SECONDS, TokenBroker, VERSION
 
 PROXY = os.environ.get('SOL_MEDIA_PROXY', 'http://172.30.90.1:40001')
@@ -26,6 +28,8 @@ WORKER_IP = os.environ.get('SOL_WORKER_IP', '172.30.90.2')
 BOT_IP = os.environ.get('SOL_BOT_IP', '172.30.90.3')
 BROKER = TokenBroker(PROXY)
 EXTRACT_GATE = threading.Lock()
+EXTRACTOR = ExtractorProcess()
+STREAMS = StreamCache()
 DECODERS = threading.BoundedSemaphore(2)
 TICKETS = {}
 TICKET_LOCK = threading.Lock()
@@ -38,6 +42,7 @@ def warp_ready():
     with WARP_LOCK:
         if time.monotonic() - WARP['checked'] < 30:
             return WARP['ready']
+        started = time.monotonic()
         try:
             opener = urllib.request.build_opener(urllib.request.ProxyHandler(
                 {'http': PROXY, 'https': PROXY}))
@@ -48,18 +53,27 @@ def warp_ready():
             if not ready:
                 raise RuntimeError('warp_not_active')
             if WARP['ip'] != trace['ip']:
+                STREAMS.clear()
+                # The initial trace has no prior session/credentials to revoke.
+                if WARP['ip'] is not None:
+                    EXTRACTOR.close()
                 BROKER.invalidate()
                 # Bypass-cache requests also prevent reuse of primary process tokens.
                 WARP['ip'] = trace['ip']
                 event('warp_egress_changed')
         except Exception as exc:
             ready = False
-            event('warp_unavailable', error_type=type(exc).__name__)
+            # URLError wraps timeouts/connect failures. Record its type only,
+            # never exception text, addresses or the trace's public IP.
+            event('warp_unavailable', error_type=type(exc).__name__,
+                  reason_type=type(getattr(exc, 'reason', exc)).__name__,
+                  elapsed_ms=int((time.monotonic() - started) * 1000))
         WARP.update(checked=time.monotonic(), ready=ready)
         return ready
 
 
 def extract(request, refresh=False, failsafe=False):
+    started = time.monotonic()
     validate_query(request['query'])
     if not warp_ready():
         raise RuntimeError('warp_unavailable')
@@ -67,16 +81,35 @@ def extract(request, refresh=False, failsafe=False):
         raise RuntimeError('extractor_busy')
     try:
         if refresh:
+            STREAMS.clear()
+            EXTRACTOR.close()
             BROKER.invalidate(fallback=failsafe)
+        cached = STREAMS.get(request['query'])
+        if cached is not None:
+            event('stream_cache_hit', elapsed_ms=int((time.monotonic() - started) * 1000))
+            return cached
         for attempt in range(2):
             try:
-                raw = run_bounded(['python3', '/opt/media/extract.py'],
-                                  data=json.dumps(request).encode(), timeout=65)
-                return json.loads(raw)
+                generation = STREAMS.generation
+                info = EXTRACTOR.request(request)
+                if generation != STREAMS.generation:
+                    raise RuntimeError('warp_session_changed')
+                try:
+                    ffmpeg_command(info)  # Cache only a validated selected stream.
+                except (ValueError, TypeError):
+                    pass
+                else:
+                    STREAMS.put(request['query'], info, generation)
+                event('extraction_complete', flat=request.get('flat') is True,
+                      query_kind='search' if request['query'].startswith('ytsearch10:') else 'url',
+                      elapsed_ms=int((time.monotonic() - started) * 1000))
+                return info
             except Exception as exc:
                 event('extraction_failed', attempt=attempt + 1, error_type=type(exc).__name__)
                 if attempt:
                     raise
+                STREAMS.clear()
+                EXTRACTOR.close()
                 BROKER.invalidate(fallback=True)
                 event('extraction_retry_fresh_tokens')
     finally:
@@ -238,6 +271,7 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(503, {'error': 'decoder_busy'})
             return
         request, info, _ = item
+        pcm_started = time.monotonic()
         sent = 0
         started = False
         failures = 0
@@ -264,6 +298,8 @@ class Handler(BaseHTTPRequestHandler):
                             if not block:
                                 break
                             if not started:
+                                event('stream_first_pcm', elapsed_ms=int(
+                                    (time.monotonic() - pcm_started) * 1000))
                                 self.send_response(200)
                                 self.send_header('Content-Type', 'application/octet-stream')
                                 self.end_headers()
@@ -314,11 +350,14 @@ def main():
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     broker_server = LimitedServer(('127.0.0.1', 4417), Handler)
     threading.Thread(target=broker_server.serve_forever, daemon=True).start()
+    # Import yt-dlp and initialize its handlers before the first /play request.
+    EXTRACTOR.start()
     # A crashed primary remains recoverable via the independent local generator.
     event('media_worker_started', provider_version=VERSION, lease_seconds=LEASE_SECONDS)
     try:
         LimitedServer(('0.0.0.0', 8080), Handler).serve_forever()
     finally:
+        EXTRACTOR.close()
         broker_server.shutdown()
         primary.terminate()
         primary.wait(timeout=5)

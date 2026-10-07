@@ -17,7 +17,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         mpsc::{Receiver, sync_channel},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{
     sync::{Mutex, OwnedSemaphorePermit, Semaphore},
@@ -145,9 +145,15 @@ async fn prepare(
     decoders: Arc<Semaphore>,
     mut media: Media,
 ) -> Result<(Media, Input)> {
+    let started = Instant::now();
     let stream = resolver.stream(&media).await?;
+    tracing::info!(
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "playback_stream_resolved"
+    );
     media.duration = stream.duration;
     let permit = decoders.acquire_owned().await?;
+    let pcm_started = Instant::now();
     // The worker supplies already-decoded PCM. The bot never opens CDN URLs.
     let mut command = Command::new("python3");
     let child = command
@@ -158,11 +164,19 @@ async fn prepare(
         .spawn()?;
     let (decoder, ready) = Decoder::buffered(child, permit);
     tokio::time::timeout(Duration::from_secs(20), ready).await??;
+    tracing::info!(
+        elapsed_ms = pcm_started.elapsed().as_millis() as u64,
+        "playback_pcm_buffered"
+    );
     let input: Input = RawAdapter::new(decoder, 48000, 2).into();
     // Songbird parses the header on a blocking worker, never on the command task.
     let input = input
         .make_playable_async(codecs::get_codec_registry(), codecs::get_probe())
         .await?;
+    tracing::info!(
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "playback_prepared"
+    );
     Ok((media, input))
 }
 
